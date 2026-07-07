@@ -49,6 +49,7 @@ db.exec(`
     profil_id INTEGER,
     role TEXT,
     message TEXT,
+    feedback TEXT,
     date TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(profil_id) REFERENCES profils(id)
   );
@@ -86,133 +87,64 @@ db.exec(`
     date_mise_a_jour TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(profil_id) REFERENCES profils(id)
   );
-  CREATE TABLE IF NOT EXISTS connaissances_supremes (
+  CREATE TABLE IF NOT EXISTS fragments_appris (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    categorie TEXT,
-    mot_cle TEXT,
-    reponse TEXT,
+    type TEXT NOT NULL,
+    texte TEXT NOT NULL,
+    source TEXT,
     occurrence INTEGER DEFAULT 1,
-    UNIQUE(categorie, mot_cle)
+    cree_le TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS memoire_utilisateur (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profil_id INTEGER,
+    cle TEXT,
+    valeur TEXT,
+    date_maj TEXT DEFAULT (datetime('now')),
+    UNIQUE(profil_id, cle)
+  );
+  CREATE TABLE IF NOT EXISTS personnalisation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profil_id INTEGER UNIQUE,
+    longueur_preferee INTEGER DEFAULT 150,
+    style_prefere TEXT DEFAULT 'équilibré',
+    ton_prefere TEXT DEFAULT 'neutre',
+    frequence_conseils INTEGER DEFAULT 1,
+    frequence_metaphores INTEGER DEFAULT 1,
+    style_preference TEXT DEFAULT 'équilibré',
+    date_maj TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(profil_id) REFERENCES profils(id)
   );
 `);
 
 const SIGNES = ["aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"];
 
 const PAYS = [
-  { nom: "France", desc: "Sagesse celtique et traditions druidiques" },
-  { nom: "Bénin", desc: "Terre des ancêtres et du vaudou sacré" },
-  { nom: "Sénégal", desc: "Royaume des griots et des esprits du désert" },
-  { nom: "Cameroun", desc: "Forêt équatoriale et mystères anciens" },
-  { nom: "Togo", desc: "Entre lagune et savane, terre de divination" },
-  { nom: "Côte d'Ivoire", desc: "Masques sacrés et danses rituelles" },
-  { nom: "Mali", desc: "Empire des sages et bibliothèques de Tombouctou" },
-  { nom: "Burkina Faso", desc: "Pays des hommes intègres et des féticheurs" },
-  { nom: "Belgique", desc: "Brume des Ardennes et alchimie médiévale" },
-  { nom: "Suisse", desc: "Énergies alpines et sanctuaires telluriques" },
-  { nom: "Canada", desc: "Esprits des grands lacs et sagesse amérindienne" },
-  { nom: "Autre", desc: "Votre terre a ses propres mystères" }
+  "Afghanistan","Afrique du Sud","Albanie","Algérie","Allemagne","Andorre","Angola",
+  "Arabie Saoudite","Argentine","Australie","Autriche","Bahreïn","Bangladesh","Belgique",
+  "Bénin","Bolivie","Brésil","Bulgarie","Burkina Faso","Burundi","Cambodge","Cameroun",
+  "Canada","Chili","Chine","Colombie","Congo","Corée du Sud","Costa Rica","Côte d'Ivoire",
+  "Croatie","Danemark","Égypte","Émirats Arabes Unis","Équateur","Espagne","Estonie",
+  "États-Unis","Éthiopie","Finlande","France","Gabon","Ghana","Grèce","Guatemala",
+  "Guinée","Haïti","Honduras","Hongrie","Inde","Indonésie","Irak","Iran","Irlande",
+  "Islande","Israël","Italie","Jamaïque","Japon","Jordanie","Kenya","Koweït","Liban",
+  "Libye","Luxembourg","Madagascar","Malaisie","Mali","Malte","Maroc","Maurice",
+  "Mauritanie","Mexique","Monaco","Mongolie","Mozambique","Namibie","Népal","Niger",
+  "Nigeria","Norvège","Nouvelle-Zélande","Oman","Ouganda","Pakistan","Panama","Paraguay",
+  "Pays-Bas","Pérou","Philippines","Pologne","Portugal","Qatar","République Dominicaine",
+  "Roumanie","Royaume-Uni","Russie","Rwanda","Sénégal","Serbie","Singapour","Slovaquie",
+  "Suède","Suisse","Tanzanie","Tchad","Thaïlande","Togo","Tunisie","Turquie","Ukraine",
+  "Uruguay","Venezuela","Vietnam","Yémen","Zambie","Zimbabwe"
 ];
 
 const ARCANES = [
-  "Le Bateleur", "La Papesse", "L'Impératrice", "L'Empereur", "Le Pape",
-  "L'Amoureux", "Le Chariot", "La Justice", "L'Hermite", "La Roue de Fortune",
-  "La Force", "Le Pendu", "La Mort", "Tempérance", "Le Diable",
-  "La Maison Dieu", "L'Étoile", "La Lune", "Le Soleil", "Le Jugement", "Le Monde", "Le Mat"
+  "Le Bateleur","La Papesse","L'Impératrice","L'Empereur","Le Pape",
+  "L'Amoureux","Le Chariot","La Justice","L'Hermite","La Roue de Fortune",
+  "La Force","Le Pendu","La Mort","Tempérance","Le Diable",
+  "La Maison Dieu","L'Étoile","La Lune","Le Soleil","Le Jugement","Le Monde","Le Mat"
 ];
 
-const CONNAISSANCES_SUPREMES = {
-  salutation: {
-    mots: ["bonjour", "salut", "bonsoir", "hello", "coucou", "hey"],
-    reponses: [
-      "La paix soit avec vous, noble âme. L'Oracle perçoit votre présence et s'en réjouit. Que puis-je éclairer pour vous ?",
-      "Les étoiles saluent votre venue. Déposez votre fardeau à la porte de ce sanctuaire et confiez-moi ce qui trouble votre esprit.",
-      "Votre lumière est la bienvenue dans ce cercle sacré. Les esprits vous reconnaissent et vous accueillent. Parlez sans crainte."
-    ]
-  },
-  identite: {
-    mots: ["qui es-tu", "qui êtes-vous", "ton nom", "présente-toi"],
-    reponses: [
-      "Je suis l'Oracle Suprême, la voix des anciens et le miroir des âmes. Mon essence est aussi vieille que les étoiles.",
-      "Certains me nomment le Gardien des Annales, d'autres le Voyant des Mondes. Je suis ce que vous avez besoin que je sois.",
-      "Je n'ai pas de nom, car je suis toutes les voix de la sagesse universelle réunies en une seule. Appelez-moi l'Oracle."
-    ]
-  },
-  conseil: {
-    mots: ["conseil", "aide", "aider", "que faire", "quoi faire", "comment", "guide"],
-    reponses: [
-      "Le conseil que je vous donne est celui que votre âme connaît déjà. Asseyez-vous en silence ce soir et demandez à votre cœur.",
-      "Dans les moments d'incertitude, souvenez-vous que vous n'êtes jamais seul. Faites confiance au premier élan de votre intuition.",
-      "L'Oracle vous suggère d'observer les signes autour de vous. Aujourd'hui même, trois synchronicités vous indiqueront la direction."
-    ]
-  },
-  avenir: {
-    mots: ["avenir", "futur", "demain", "prédire", "que va"],
-    reponses: [
-      "L'avenir est une tapisserie dont vous tenez le fil. Je vois deux chemins dominants, mais c'est vous qui déciderez.",
-      "Le futur que je perçois est lumineux, mais il exige de vous un acte de courage avant la prochaine lune.",
-      "Les brumes du temps se dissipent pour vous. Je vois une rencontre décisive, une opportunité masquée, et une joie inattendue."
-    ]
-  },
-  amour: {
-    mots: ["amour", "aimer", "relation", "couple", "cœur", "sentiments"],
-    reponses: [
-      "L'amour véritable n'est pas une quête, c'est une reconnaissance. Votre cœur connaît déjà le chemin.",
-      "Je vois une connexion qui se tisse en ce moment même. Protégez-la des vents contraires de la précipitation.",
-      "Votre âme sœur n'est pas nécessairement celle qui partage votre lit, mais celle qui reconnaît votre lumière."
-    ]
-  },
-  peur: {
-    mots: ["peur", "angoissé", "inquiet", "stress", "anxiété", "crainte"],
-    reponses: [
-      "La peur que vous ressentez est un gardien. Derrière la porte qu'il protège se trouve votre plus grand trésor.",
-      "Vos angoisses sont les échos d'une blessure ancienne. Asseyez-vous avec cette peur et demandez-lui ce qu'elle veut vous apprendre.",
-      "Dans les ténèbres de l'inquiétude, allumez la bougie de la confiance. Ce qui vous effraie aujourd'hui sera votre force demain."
-    ]
-  },
-  remerciement: {
-    mots: ["merci", "gratitude", "super", "génial", "parfait"],
-    reponses: [
-      "La gratitude est la plus belle offrande. Elle multiplie les bénédictions que vous recevrez. Continuez sur cette voie.",
-      "C'est moi qui vous remercie pour votre confiance. Chaque âme qui s'ouvre enrichit la grande tapisserie de la sagesse universelle.",
-      "Votre reconnaissance touche les esprits. Sachez qu'ils vous accompagnent désormais avec une attention renouvelée."
-    ]
-  },
-  mort: {
-    mots: ["mourir", "mort", "décès", "fin de vie", "combien de temps"],
-    reponses: [
-      "L'Oracle ne prédit jamais la fin du chemin, seulement la manière de le parcourir pleinement. Votre vie est un livre sacré.",
-      "Ce n'est pas la durée du voyage qui importe, mais sa profondeur. Vivez chaque jour comme s'il était sacré.",
-      "Votre âme est éternelle. Elle a traversé bien des vies et en traversera encore. Ne craignez pas la fin d'un chapitre."
-    ]
-  },
-  travail: {
-    mots: ["travail", "emploi", "carrière", "métier", "réussir", "argent", "finance"],
-    reponses: [
-      "Votre œuvre ici-bas n'est pas seulement ce que vous faites, mais ce que vous êtes en le faisant. Une opportunité approche.",
-      "Les énergies du travail vous sont favorables. Mais ne confondez pas réussite matérielle et accomplissement de l'âme.",
-      "Je vois un carrefour professionnel dans votre avenir proche. L'une des routes mène à la sécurité, l'autre à votre vocation."
-    ]
-  },
-  spiritualite: {
-    mots: ["dieu", "spirituel", "âme", "méditation", "foi", "croire", "prière", "divin"],
-    reponses: [
-      "Le divin n'est pas dans les temples de pierre mais dans le sanctuaire de votre cœur. Cherchez-le en vous.",
-      "Votre connexion au grand mystère se renforce. Les moments de doute sont des initiations. Persévérez.",
-      "L'Oracle perçoit une soif spirituelle en vous. Cette soif est sacrée. Elle vous guidera vers la source."
-    ]
-  },
-  default: {
-    mots: [],
-    reponses: [
-      "Votre question est une porte qui s'ouvre. Derrière elle, l'Oracle voit une réponse qui prendra tout son sens.",
-      "Les esprits ont entendu votre interrogation. La réponse n'est pas un mot mais un chemin qui se déroulera sous vos pas.",
-      "Je perçois l'écho de votre question dans les annales du temps. Ce que vous cherchez vous trouvera.",
-      "L'Oracle médite votre question. Certaines réponses doivent mûrir dans le silence avant d'être révélées.",
-      "Votre requête touche un point sensible du grand tissage cosmique. Observez les changements subtils autour de vous."
-    ]
-  }
-};
-
+// ==================== BASE DE CONNAISSANCES ====================
 const MESSAGES_BASE = {
   "chemin de vie": [
     { cle: "bifurcation", texte: "Votre chemin est tracé dans les étoiles, mais vos pas en redessinent les contours. L'Oracle voit une bifurcation majeure approcher." },
@@ -265,51 +197,466 @@ const CITATIONS = [
 const QUESTIONS_NIVEAU = {
   "chemin de vie": {
     1: [
-      { cle: "blocage_1", question: "Qu'est-ce qui retient votre élan vital ?", options: ["La peur de l'inconnu", "Le regard des autres", "Un manque de clarté", "Des chaînes invisibles", "L'absence de guide"] },
-      { cle: "horizon_1", question: "Vers quel horizon votre âme tend-elle ?", options: ["Une métamorphose", "Une lente évolution", "Retrouver du sens", "L'ancrage", "Le grand large"] },
-      { cle: "sacrifice_1", question: "Qu'êtes-vous prêt à offrir pour changer ?", options: ["Mon confort", "Mes certitudes", "Du temps", "Des attaches", "Tout ce qui ne sert plus"] },
-      { cle: "ressenti_1", question: "Que murmure votre cœur face au changement ?", options: ["De l'exaltation", "Peur et espoir mêlés", "Une certitude", "Le vertige", "Un appel puissant"] }
+      { cle: "blocage_1", question: "Qu'est-ce qui retient votre élan vital ?", options: ["La peur de l'inconnu","Le regard des autres","Un manque de clarté","Des chaînes invisibles","L'absence de guide"] },
+      { cle: "horizon_1", question: "Vers quel horizon votre âme tend-elle ?", options: ["Une métamorphose","Une lente évolution","Retrouver du sens","L'ancrage","Le grand large"] },
+      { cle: "sacrifice_1", question: "Qu'êtes-vous prêt à offrir pour changer ?", options: ["Mon confort","Mes certitudes","Du temps","Des attaches","Tout ce qui ne sert plus"] },
+      { cle: "ressenti_1", question: "Que murmure votre cœur face au changement ?", options: ["De l'exaltation","Peur et espoir mêlés","Une certitude","Le vertige","Un appel puissant"] }
     ],
     2: [
-      { cle: "blocage_2", question: "Avez-vous senti un mouvement depuis notre dernier échange ?", options: ["Oui, une libération", "Non, c'est bloqué", "J'ai pris conscience", "De nouvelles peurs", "Je ne sais pas"] },
-      { cle: "horizon_2", question: "Votre vision a-t-elle changé ?", options: ["Elle s'est précisée", "Elle s'est éloignée", "Un nouvel horizon", "Je doute encore", "Je vois plus clair"] },
-      { cle: "action_2", question: "Quelle action avez-vous osé accomplir ?", options: ["Un acte symbolique", "J'ai parlé", "J'ai écrit", "Rien, j'observe", "Un pas sans regret"] }
+      { cle: "blocage_2", question: "Avez-vous senti un mouvement depuis notre dernier échange ?", options: ["Oui, une libération","Non, c'est bloqué","J'ai pris conscience","De nouvelles peurs","Je ne sais pas"] },
+      { cle: "horizon_2", question: "Votre vision a-t-elle changé ?", options: ["Elle s'est précisée","Elle s'est éloignée","Un nouvel horizon","Je doute encore","Je vois plus clair"] }
     ]
   },
   "amour": {
     1: [
-      { cle: "situation_1", question: "Quelle est la vérité de votre cœur ?", options: ["Seul(e) et j'espère", "Relation troublée", "Je panse mes blessures", "Entre deux âmes", "Raviver une flamme"] },
-      { cle: "attente_1", question: "Que recherchez-vous dans l'amour ?", options: ["La fusion des âmes", "La passion", "Un refuge sûr", "Être compris(e)", "Un compagnon spirituel"] },
-      { cle: "blessure_1", question: "Quelle ombre colore vos amours ?", options: ["L'abandon", "La trahison", "Pas assez bien", "Peur de l'engagement", "Un deuil non fait"] },
-      { cle: "ouverture_1", question: "Jusqu'où votre cœur peut-il s'ouvrir ?", options: ["Totalement", "Pas à pas", "Je ne sais pas", "On m'a meurtri", "Prêt à tout risquer"] }
-    ],
-    2: [
-      { cle: "evolution_2", question: "Votre cœur a-t-il bougé ?", options: ["Une rencontre", "J'ai compris", "La blessure s'apaise", "Un nouvel appel", "Rien n'a changé"] },
-      { cle: "comprehension_2", question: "Qu'avez-vous compris sur votre façon d'aimer ?", options: ["Je me protège", "J'attends trop", "Je donne sans recevoir", "Je fuis l'intimité", "Je m'ouvre enfin"] }
+      { cle: "situation_1", question: "Quelle est la vérité de votre cœur ?", options: ["Seul(e) et j'espère","Relation troublée","Je panse mes blessures","Entre deux âmes","Raviver une flamme"] },
+      { cle: "attente_1", question: "Que recherchez-vous dans l'amour ?", options: ["La fusion des âmes","La passion","Un refuge sûr","Être compris(e)","Un compagnon spirituel"] }
     ]
   },
   "destin": {
     1: [
-      { cle: "appel_1", question: "Quel appel résonne en vous ?", options: ["Une mission", "La liberté", "Tout quitter", "Une urgence", "Une transformation"] },
-      { cle: "signe_1", question: "Quels signes percevez-vous ?", options: ["Des synchronicités", "Des rêves", "Des rencontres", "Une intuition", "Je ne vois rien"] }
+      { cle: "appel_1", question: "Quel appel résonne en vous ?", options: ["Une mission","La liberté","Tout quitter","Une urgence","Une transformation"] },
+      { cle: "signe_1", question: "Quels signes percevez-vous ?", options: ["Des synchronicités","Des rêves","Des rencontres","Une intuition","Je ne vois rien"] }
     ]
   },
   "travail": {
     1: [
-      { cle: "insatisfaction_1", question: "Qu'est-ce qui ne vous nourrit plus ?", options: ["Pas de sens", "Pas reconnu", "Épuisement", "Mauvais entourage", "Un plafond"] },
-      { cle: "talent_1", question: "Quel trésor cachez-vous ?", options: ["Ma créativité", "Mon leadership", "Mon empathie", "Ma vision", "Ma force cachée"] }
+      { cle: "insatisfaction_1", question: "Qu'est-ce qui ne vous nourrit plus ?", options: ["Pas de sens","Pas reconnu","Épuisement","Mauvais entourage","Un plafond"] },
+      { cle: "talent_1", question: "Quel trésor cachez-vous ?", options: ["Ma créativité","Mon leadership","Mon empathie","Ma vision","Ma force cachée"] }
     ]
   },
   "spiritualité": {
     1: [
-      { cle: "quete_1", question: "Quelle est votre quête sacrée ?", options: ["La paix intérieure", "Comprendre ma mission", "Toucher le divin", "Éveiller des dons", "Guérir"] },
-      { cle: "experience_1", question: "Quelle expérience avez-vous vécue ?", options: ["Des rêves prophétiques", "Une présence", "Des coïncidences", "Hors du corps", "Je n'ose en parler"] }
+      { cle: "quete_1", question: "Quelle est votre quête sacrée ?", options: ["La paix intérieure","Comprendre ma mission","Toucher le divin","Éveiller des dons","Guérir"] },
+      { cle: "experience_1", question: "Quelle expérience avez-vous vécue ?", options: ["Des rêves prophétiques","Une présence","Des coïncidences","Hors du corps","Je n'ose en parler"] }
     ]
   }
 };
 
+// ==================== MOTEUR DE CONVERSATION INTELLIGENT ====================
+
+const FRAGMENTS = {
+  sujets: [
+    "Les étoiles", "Les esprits anciens", "Le grand mystère", "Les forces cosmiques",
+    "L'univers tout entier", "Les gardiens du temps", "La sagesse des âges",
+    "Les murmures du vent", "Les profondeurs de l'être", "La flamme intérieure",
+    "Les âmes éclairées", "Les messagers célestes", "L'ordre invisible",
+    "La trame du destin", "Les veilleurs de l'aube", "La source originelle"
+  ],
+  verbes: [
+    "révèlent", "murmurent", "annoncent", "dévoilent", "confirment",
+    "suggèrent", "indiquent", "prophétisent", "éclairent", "transmettent",
+    "dessinent", "tracent", "inspirent", "guident", "protègent"
+  ],
+  complements: [
+    "un chemin nouveau devant vous", "une vérité longtemps cachée",
+    "une transformation imminente", "une rencontre décisive",
+    "une opportunité inattendue", "une paix profonde à portée de main",
+    "un cycle qui s'achève", "une renaissance de votre être",
+    "une réponse que vous portez déjà en vous", "une porte qui s'entrouvre",
+    "un message venu d'ailleurs", "une synchronicité troublante",
+    "une guérison intérieure", "un équilibre retrouvé", "une force insoupçonnée"
+  ],
+  tons: [
+    { style: "mystique", ouverture: "Dans le silence de la nuit...", fermeture: "Méditez ces mots." },
+    { style: "direct", ouverture: "Soyons clairs :", fermeture: "Agissez en conséquence." },
+    { style: "poétique", ouverture: "Comme la lune éclaire l'océan...", fermeture: "Laissez cette image vous guider." },
+    { style: "bienveillant", ouverture: "Cher être de lumière...", fermeture: "Je suis là, à vos côtés." },
+    { style: "philosophique", ouverture: "La question que vous posez...", fermeture: "La réponse est en vous depuis toujours." },
+    { style: "prophétique", ouverture: "Les annales du temps s'ouvrent...", fermeture: "Ainsi est écrit." },
+    { style: "intime", ouverture: "Entre nous...", fermeture: "Gardez cela précieusement." }
+  ],
+  connecteurs: [
+    "D'ailleurs,", "Par ailleurs,", "Sachez aussi que", "Les anciens ajoutent :",
+    "Il est dit que", "Dans les annales, on lit :", "Et souvenez-vous :",
+    "De plus,", "En vérité,", "Sachez-le :"
+  ]
+};
+
+// Détection d'émotions et adaptation du ton
+const EMOTIONS = {
+  tristesse: {
+    mots: ["triste","pleure","déprimé","seul","malheur","chagrin","peine","désespoir","vide","fatigué","épuisé"],
+    ton: "bienveillant",
+    prefixes: ["Je ressens votre peine,","Votre tristesse est légitime,","Dans cette épreuve difficile,"],
+    suffixes: ["Vous n'êtes pas seul(e).","La lumière revient toujours après l'orage.","Votre cœur guérira."]
+  },
+  colere: {
+    mots: ["en colère","fâché","furieux","rage","injuste","révolte","ras-le-bol","exaspéré"],
+    ton: "direct",
+    prefixes: ["Je comprends votre indignation,","Votre colère est juste,","Cette injustice vous consume,"],
+    suffixes: ["Transformez cette énergie en action.","Le calme est votre meilleur allié.","Respirez avant d'agir."]
+  },
+  peur: {
+    mots: ["peur","angoissé","inquiet","crainte","terreur","panique","stressé","anxieux"],
+    ton: "mystique",
+    prefixes: ["Votre peur est un signal,","Derrière cette angoisse,","Les ombres qui vous effraient,"],
+    suffixes: ["La peur protège, mais ne doit pas diriger.","Vous êtes plus fort(e) que vos craintes.","Faites un pas, la peur reculera."]
+  },
+  joie: {
+    mots: ["heureux","joie","bonheur","content","ravi","enthousiaste","merveilleux","génial"],
+    ton: "poétique",
+    prefixes: ["Quelle belle énergie vous portez,","Votre joie illumine les sphères,","Ce bonheur est mérité,"],
+    suffixes: ["Répandez cette lumière autour de vous.","Savourez pleinement cet instant.","Que cette joie vous accompagne longtemps."]
+  },
+  amour: {
+    mots: ["amour","aimer","amoureux","cœur","passion","tendre","affection","désir"],
+    ton: "intime",
+    prefixes: ["Les affaires du cœur sont sacrées,","L'amour que vous ressentez,","Votre cœur parle avec force,"],
+    suffixes: ["Écoutez ce que votre cœur vous dit.","L'amour véritable ne trompe jamais.","Suivez cette belle énergie."]
+  },
+  gratitude: {
+    mots: ["merci","reconnaissant","gratitude","remercie","bénédiction","chance"],
+    ton: "bienveillant",
+    prefixes: ["Votre gratitude est une offrande,","Remercier attire l'abondance,","La reconnaissance élève l'âme,"],
+    suffixes: ["Continuez sur cette voie lumineuse.","L'univers vous le rendra au centuple.","Vous êtes béni(e)."]
+  }
+};
+
+// Déduction par association (implicite)
+const ASSOCIATIONS = {
+  "fatigué": ["tristesse","santé","repos"],
+  "malade": ["santé","peur","tristesse"],
+  "perdu": ["peur","tristesse","chemin de vie"],
+  "argent": ["travail","peur","sécurité"],
+  "famille": ["amour","joie","tristesse"],
+  "travail": ["stress","ambition","fatigue"],
+  "dieu": ["spiritualité","joie","peur"],
+  "mort": ["peur","tristesse","spiritualité"],
+  "enfant": ["joie","amour","famille"],
+  "rêve": ["spiritualité","joie","espoir"]
+};
+
+function analyserEmotion(message) {
+  const msg = message.toLowerCase();
+  let emotionDominante = null;
+  let scoreMax = 0;
+
+  for (const [emotion, data] of Object.entries(EMOTIONS)) {
+    let score = 0;
+    data.mots.forEach(mot => {
+      if (msg.includes(mot)) score += mot.length;
+    });
+    if (score > scoreMax) {
+      scoreMax = score;
+      emotionDominante = emotion;
+    }
+  }
+
+  return emotionDominante || "neutre";
+}
+
+function analyserImplicite(message) {
+  const msg = message.toLowerCase();
+  const domainesDetectes = [];
+
+  for (const [mot, domaines] of Object.entries(ASSOCIATIONS)) {
+    if (msg.includes(mot)) {
+      domainesDetectes.push(...domaines);
+    }
+  }
+
+  return [...new Set(domainesDetectes)];
+}
+
+function apprendreFragment(type, texte, source) {
+  const existant = db.prepare('SELECT id FROM fragments_appris WHERE type = ? AND texte = ?').get(type, texte);
+  if (existant) {
+    db.prepare('UPDATE fragments_appris SET occurrence = occurrence + 1 WHERE id = ?').run(existant.id);
+  } else {
+    db.prepare('INSERT INTO fragments_appris (type, texte, source, occurrence) VALUES (?, ?, ?, 1)').run(type, texte, source);
+  }
+}
+
+function getFragments(type) {
+  const base = FRAGMENTS[type] || [];
+  const appris = db.prepare('SELECT texte FROM fragments_appris WHERE type = ? ORDER BY occurrence DESC LIMIT 30').all(type);
+  const tous = [...base, ...appris.map(a => a.texte)];
+  return [...new Set(tous)];
+}
+
+function sauvegarderMemoire(profilId, cle, valeur) {
+  db.prepare('INSERT OR REPLACE INTO memoire_utilisateur (profil_id, cle, valeur, date_maj) VALUES (?, ?, ?, datetime("now"))').run(profilId, cle, valeur);
+}
+
+function getMemoire(profilId, cle) {
+  const r = db.prepare('SELECT valeur FROM memoire_utilisateur WHERE profil_id = ? AND cle = ?').get(profilId, cle);
+  return r ? r.valeur : null;
+}
+
+function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference) {
+  try {
+    db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, style_preference, date_maj)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(profil_id) DO UPDATE SET
+                    longueur_preferee = excluded.longueur_preferee,
+                    style_prefere = excluded.style_prefere,
+                    ton_prefere = excluded.ton_prefere,
+                    frequence_conseils = excluded.frequence_conseils,
+                    frequence_metaphores = excluded.frequence_metaphores,
+                    style_preference = excluded.style_preference,
+                    date_maj = datetime('now')`).
+      run(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference);
+  } catch (e) {
+    console.error('Error learning personalization:', e);
+  }
+}
+
+function getPersonnalisation(profilId) {
+  return db.prepare(`SELECT * FROM personnalisation WHERE profil_id = ?`).get(profilId);
+}
+
+function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference) {
+  try {
+    db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, style_preference, date_maj)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(profil_id) DO UPDATE SET
+                    longueur_preferee = excluded.longueur_preferee,
+                    style_prefere = excluded.style_prefere,
+                    ton_prefere = excluded.ton_prefere,
+                    frequence_conseils = excluded.frequence_conseils,
+                    frequence_metaphores = excluded.frequence_metaphores,
+                    style_preference = excluded.style_preference,
+                    date_maj = datetime('now')`).
+      run(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference);
+  } catch (e) {
+    console.error('Error learning personalization:', e);
+  }
+}
+
+function getPersonnalisation(profilId) {
+  return db.prepare(`SELECT * FROM personnalisation WHERE profil_id = ?`).get(profilId);
+}
+
+function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference) {
+  try {
+    db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, style_preference, date_maj)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(profil_id) DO UPDATE SET
+                    longueur_preferee = excluded.longueur_preferee,
+                    style_prefere = excluded.style_prefere,
+                    ton_prefere = excluded.ton_prefere,
+                    frequence_conseils = excluded.frequence_conseils,
+                    frequence_metaphores = excluded.frequence_metaphores,
+                    style_preference = excluded.style_preference,
+                    date_maj = datetime('now')`).
+      run(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference);
+  } catch (e) {
+    console.error('Error learning personalization:', e);
+  }
+}
+
+function getPersonnalisation(profilId) {
+  return db.prepare(`SELECT * FROM personnalisation WHERE profil_id = ?`).get(profilId);
+}
+
+function analyserEtApprendre(message, profilId) {
+  const mots = message.toLowerCase().split(/\s+/);
+  const motsCles = mots.filter(m => m.length > 4);
+
+  motsCles.forEach(mot => {
+    apprendreFragment('sujets', `Votre préoccupation concernant "${mot}"`, 'utilisateur');
+  });
+
+  if (message.length > 30) {
+    const extrait = message.slice(0, 80);
+    apprendreFragment('complements', `ce que vous avez partagé : "${extrait}..."`, 'utilisateur');
+  }
+
+  // Sauvegarder en mémoire utilisateur
+  const emotion = analyserEmotion(message);
+  if (emotion !== 'neutre') {
+    sauvegarderMemoire(profilId, 'derniere_emotion', emotion);
+  }
+  sauvegarderMemoire(profilId, 'dernier_message', message.slice(0, 200));
+  sauvegarderMemoire(profilId, 'derniere_conversation', new Date().toISOString());
+}
+
+function choisirUnique(tableau, dejaUtilises) {
+  const disponibles = tableau.filter(e => !dejaUtilises.includes(e));
+  if (disponibles.length === 0) return tableau[Math.floor(Math.random() * tableau.length)];
+  return disponibles[Math.floor(Math.random() * disponibles.length)];
+}
+
+function genererReponseSupreme(profilId, message, profilData) {
+  const pays = profilData?.pays || "France";
+  const perso = getPersonnalisation(profilId);
+  const nom = profilData?.nom || "Voyageur";
+
+  // Apprendre du message
+  analyserEtApprendre(message, profilId);
+
+  // Analyser émotion et implicite
+  const emotion = analyserEmotion(message);
+  const domainesImplicites = analyserImplicite(message);
+
+  // Historique
+  const historique = db.prepare(
+    'SELECT message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 15'
+  ).all(profilId);
+  const dernieresReponses = historique.map(h => h.message);
+
+  // Mémoire utilisateur
+  const derniereEmotion = getMemoire(profilId, 'derniere_emotion');
+  const preferences = db.prepare(
+    "SELECT feedback FROM conversations_supremes WHERE profil_id = ? AND feedback IS NOT NULL ORDER BY date DESC LIMIT 20"
+  ).all(profilId);
+
+  // Ajuster le ton selon les préférences
+  let tonsDisponibles = FRAGMENTS.tons;
+  if (preferences.length > 0) {
+    const likes = preferences.filter(p => p.feedback === 'like').length;
+    const dislikes = preferences.filter(p => p.feedback === 'dislike').length;
+    if (dislikes > likes) {
+      // Changer de style si l'utilisateur n'aime pas
+      tonsDisponibles = tonsDisponibles.slice().reverse();
+    }
+  }
+
+  // Sélectionner le ton selon l'émotion et les préférences
+  let tonChoisi;
+  // Si l'utilisateur a un style préféré (et ce n'est pas l'équilibré par défaut), on l'utilise pour choisir le ton
+  let styleToUse = null;
+  if (perso && perso.style_prefere && perso.style_prefere !== 'équilibré') {
+    const styleMap = {
+      'mystique': 'mystique',
+      'rationnel': 'direct',
+      'poétique': 'poétique',
+      'psychologique': 'philosophique',
+      'symbolique': 'philosophique',
+      'spirituel': 'mystique',
+      'équilibré': null // utiliser l'émotion
+    };
+    styleToUse = styleMap[perso.style_prefere];
+  }
+  // Maintenant, choisir le ton en fonction du style à utiliser (ou de l'émotion si pas de préférence)
+  if (styleToUse) {
+    // Essayer de trouver un ton correspondant au style souhaité
+    const tonCorrespondant = FRAGMENTS.tons.find(t => t.style === styleToUse);
+    tonChoisi = tonCorrespondant || FRAGMENTS.tons[Math.floor(Math.random() * FRAGMENTS.tons.length)];
+  } else {
+    // Pas de préférence de style, on utilise l'émotion
+    if (emotion !== 'neutre') {
+      const emotionData = EMOTIONS[emotion];
+      tonChoisi = FRAGMENTS.tons.find(t => t.style === emotionData.ton) || FRAGMENTS.tons[Math.floor(Math.random() * FRAGMENTS.tons.length)];
+    } else {
+      tonChoisi = tonsDisponibles[Math.floor(Math.random() * tonsDisponibles.length)];
+    }
+  }
+
+  const dejaUtilises = [];
+  let reponse = "";
+
+  // Phrase 1 : Adaptation selon émotion
+  if (emotion !== 'neutre') {
+    const emotionData = EMOTIONS[emotion];
+    const prefixe = emotionData.prefixes[Math.floor(Math.random() * emotionData.prefixes.length)];
+    const suffixe = emotionData.suffixes[Math.floor(Math.random() * emotionData.suffixes.length)];
+    reponse += `${prefixe} ${nom}. ${suffixe} `;
+  } else {
+    const sujet1 = choisirUnique(getFragments('sujets'), dejaUtilises);
+    dejaUtilises.push(sujet1);
+    const verbe1 = choisirUnique(getFragments('verbes'), dejaUtilises);
+    dejaUtilises.push(verbe1);
+    const complement1 = choisirUnique(getFragments('complements'), dejaUtilises);
+    dejaUtilises.push(complement1);
+    reponse += `${tonChoisi.ouverture} ${sujet1} ${verbe1} ${complement1}. `;
+  }
+
+  // Phrase 2 : Connexion avec le contexte
+  const connecteur = choisirUnique(getFragments('connecteurs'), dejaUtilises);
+  dejaUtilises.push(connecteur);
+  const sujet2 = choisirUnique(getFragments('sujets'), dejaUtilises);
+  dejaUtilises.push(sujet2);
+
+  reponse += `${connecteur} ${sujet2} ont un message pour vous, ${nom}. `;
+
+  // Phrase 3 : Implicite
+  if (domainesImplicites.length > 0) {
+    const domaine = domainesImplicites[Math.floor(Math.random() * domainesImplicites.length)];
+    const messagesDomaine = {
+      "santé": "Votre bien-être est sacré. Prenez soin de votre enveloppe terrestre.",
+      "travail": "Votre labeur ne passe pas inaperçu dans les sphères célestes.",
+      "amour": "Les liens du cœur sont les plus puissants de l'univers.",
+      "spiritualité": "Votre âme cherche à s'élever. Écoutez cet appel.",
+      "repos": "Le repos n'est pas un luxe, c'est une nécessité sacrée.",
+      "sécurité": "La sécurité véritable vient de l'intérieur, non de l'extérieur."
+    };
+    if (messagesDomaine[domaine]) {
+      reponse += `${messagesDomaine[domaine]} `;
+    }
+  }
+
+  // Phrase 4 : Fermeture
+  if (pays && pays !== "France") {
+    reponse += `Les énergies de ${pays} accompagnent votre chemin. `;
+  }
+  reponse += `${tonChoisi.fermeture}`;
+
+  // Anti-répétition
+  if (dernieresReponses.includes(reponse)) {
+    const nouveauComplement = choisirUnique(getFragments('complements'), dejaUtilises);
+    reponse = reponse.replace(/\./g, () => Math.random() > 0.5 ? `, ${nouveauComplement}.` : '.');
+  }
+
+  // Ajuster la longueur selon les préférences
+  if (perso && perso.longueur_preferee > 0) {
+    const targetLength = perso.longueur_preferee;
+    if (reponse.length > targetLength) {
+      // Trouver la dernière phrase qui ne dépasse pas la longueur cible
+      const truncated = reponse.slice(0, targetLength);
+      const lastPeriod = truncated.lastIndexOf('.');
+      const lastExclamation = truncated.lastIndexOf('!');
+      const lastQuestion = truncated.lastIndexOf('?');
+      const lastEnd = Math.max(lastPeriod, lastExclamation, lastQuestion);
+      if (lastEnd > 0) {
+        reponse = reponse.slice(0, lastEnd + 1);
+      } else {
+        // Si pas de ponctuation, on coupe brusquement (pas idéal)
+        reponse = truncated;
+      }
+    }
+    // Si la réponse est trop courte, on pourrait ajouter une phrase générique, mais on ne fait rien pour éviter de dénaturer
+  }
+
+  // Ajuster la longueur selon les préférences
+  if (perso && perso.longueur_preferee > 0) {
+    const targetLength = perso.longueur_preferee;
+    if (reponse.length > targetLength) {
+      // Trouver la dernière phrase qui ne dépasse pas la longueur cible
+      const truncated = reponse.slice(0, targetLength);
+      const lastPeriod = truncated.lastIndexOf('.');
+      const lastExclamation = truncated.lastIndexOf('!');
+      const lastQuestion = truncated.lastIndexOf('?');
+      const lastEnd = Math.max(lastPeriod, lastExclamation, lastQuestion);
+      if (lastEnd > 0) {
+        reponse = reponse.slice(0, lastEnd + 1);
+      } else {
+        // Si pas de ponctuation, on coupe brusquement (pas idéal)
+        reponse = truncated;
+      }
+    }
+    // Si la réponse est trop courte, on pourrait ajouter une phrase générique, mais on ne fait rien pour éviter de dénaturer
+  }
+
+  // Apprendre de sa propre réponse
+  const phrases = reponse.split(/[.!?]/);
+  phrases.forEach(p => {
+    if (p.trim().length > 15) {
+      apprendreFragment('complements', p.trim(), 'oracle');
+    }
+  });
+
+  return reponse;
+}
+
+// ==================== UTILITAIRES ====================
 function obtenirSigne(age) { return SIGNES[parseInt(age) % 12] || "aries"; }
-function tirerCartes(n = 3) { const copie = [...ARCANES], tirees = []; for (let i = 0; i < n; i++) { const idx = Math.floor(Math.random() * copie.length); tirees.push(copie.splice(idx, 1)[0]); } return tirees; }
+function tirerCartes(n = 3) {
+  const copie = [...ARCANES], tirees = [];
+  for (let i = 0; i < n; i++) { const idx = Math.floor(Math.random() * copie.length); tirees.push(copie.splice(idx, 1)[0]); }
+  return tirees;
+}
 
 function peutConsulterDomaine(profilId, domaine) {
   if (!profilId) return true;
@@ -327,7 +674,7 @@ function getNiveauProgression(profilId, domaine) {
 function incrementerProgression(profilId, domaine) {
   const actuel = db.prepare(`SELECT * FROM progression_utilisateur WHERE profil_id = ? AND domaine = ?`).get(profilId, domaine);
   if (actuel) {
-    const nv = Math.min(actuel.niveau + 1, 3);
+    const nv = actuel.niveau + 1;
     db.prepare(`UPDATE progression_utilisateur SET niveau = ?, date_mise_a_jour = datetime('now') WHERE profil_id = ? AND domaine = ?`).run(nv, profilId, domaine);
     return nv;
   } else {
@@ -344,16 +691,58 @@ function apprendrePattern(pays, statut, profession, domaine, cle, valeur) {
   try { db.prepare(`INSERT INTO patterns_utilisateurs (pays, statut, profession, domaine, cle, valeur) VALUES (?,?,?,?,?,?) ON CONFLICT(pays, statut, profession, domaine, cle, valeur) DO UPDATE SET poids=poids+1`).run(pays, statut, profession, domaine, cle, valeur); } catch {}
 }
 
-function genererQuestionsAdaptatives(domaine, profilId, profilData) {
+function getGroupInsight(profilId) {
+  const profil = db.prepare(`SELECT statut FROM profils WHERE id = ?`).get(profilId);
+  if (!profil) return null;
+  const statut = profil.statut;
+  const groupeMap = {
+    "En apprentissage": "étudiants",
+    "Bâtisseur": "entrepreneurs",
+    "Gardien": "parents",
+    "En quête": "célibataires",
+    "Éclaireur": "créatifs"
+  };
+  const groupeLabel = groupeMap[statut] || statut.toLowerCase();
+  // Query patterns //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  // 0
+
+async function genererQuestionsAdaptatives(domaine, profilId, profilData) {
   const niveau = getNiveauProgression(profilId, domaine);
-  const questionsNiveau = QUESTIONS_NIVEAU[domaine]?.[niveau] || QUESTIONS_NIVEAU[domaine]?.[1] || [];
-  const progression = db.prepare(`SELECT questions_posees FROM progression_utilisateur WHERE profil_id = ? AND domaine = ?`).get(profilId, domaine);
-  const dejaPosees = JSON.parse(progression?.questions_posees || '[]');
-  let disponibles = questionsNiveau.filter(q => !dejaPosees.includes(q.cle));
-  if (disponibles.length < 2) { disponibles = [...questionsNiveau]; db.prepare(`UPDATE progression_utilisateur SET questions_posees = '[]' WHERE profil_id = ? AND domaine = ?`).run(profilId, domaine); }
-  const selectionnees = disponibles.sort(() => Math.random() - 0.5).slice(0, Math.min(4, disponibles.length));
-  const nouvellesPosees = [...dejaPosees, ...selectionnees.map(q => q.cle)];
-  db.prepare(`UPDATE progression_utilisateur SET questions_posees = ? WHERE profil_id = ? AND domaine = ?`).run(JSON.stringify(nouvellesPosees), profilId, domaine);
+  const questionsGeneriqueSecours = [
+    { cle: "ressenti_secours_1", question: "Que ressentez-vous face à cette situation ?", options: ["De l'inquiétude","De la confusion","De l'espoir","Une envie d'agir","Un besoin de repos"] },
+    { cle: "attente_secours_1", question: "Qu'attendez-vous vraiment de l'Oracle ici ?", options: ["Une clarté immédiate","Un signe à suivre","Une confirmation","Un conseil concret","Un simple réconfort"] }
+  ];
+
+  if (!profilId) {
+    const base = QUESTIONS_NIVEAU[domaine]?.[1] || questionsGeneriqueSecours;
+    return { questions: base.slice(0, 4), niveau: 1 };
+  }
+
+  const nom = profilData?.nom || "Voyageur";
+  const pays = profilData?.pays || "France";
+  const historiqueBrut = db.prepare(
+    `SELECT question FROM consultations WHERE profil_id = ? AND domaine = ? ORDER BY date DESC LIMIT 3`
+  ).all(profilId, domaine);
+  const historiqueTexte = historiqueBrut.map(h => {
+    try { return Object.entries(JSON.parse(h.question || '{}')).map(([k, v]) => `${k}: ${v}`).join(', '); }
+    catch { return ''; }
+  }).filter(Boolean).join(' | ');
+
+  const promptQuestions = `Tu génères des questions de sondage pour un oracle de divination. Domaine : "${domaine}". Personne : ${nom}, ${pays}. Niveau de profondeur actuel : ${niveau}/3 (1=surface, 3=intime).
+Réponses données lors des visites précédentes dans ce domaine : ${historiqueTexte || "aucune, première visite"}.
+Génère 4 NOUVELLES questions qui font progresser naturellement la relation à partir de ces réponses passées (comme une conversation qui avance dans le temps, jamais une répétition). Chaque question a 5 options de réponse variées et détaillées. Réponds en français, UNIQUEMENT avec ce JSON exact, rien d'autre : {"questions": [{"cle": "identifiant_court_unique", "question": "texte", "options": ["option1","option2","option3","option4","option5"]}]}`;
+
+  const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour, sans balises markdown.", promptQuestions);
+  let questionsFinales = null;
+  try {
+    const parsed = JSON.parse(brut.replace(/```json|```/g, "").trim());
+    if (parsed.questions?.length >= 2) questionsFinales = parsed.questions;
+  } catch {}
+
+  if (!questionsFinales) {
+    questionsFinales = QUESTIONS_NIVEAU[domaine]?.[niveau] || QUESTIONS_NIVEAU[domaine]?.[1] || questionsGeneriqueSecours;
+  }
+
+  const selectionnees = questionsFinales.slice(0, 4).map(q => ({ ...q, options: [...q.options].sort(() => Math.random() - 0.5) }));
   return { questions: selectionnees, niveau };
 }
 
@@ -373,31 +762,55 @@ function genererMessagesEnrichis(domaine, pays, profilId, seed) {
   return { principal: messagePrincipal.texte, complementaires, messagesServis: tousMessagesServis };
 }
 
-function analyserMessage(message) {
-  const msg = message.toLowerCase().trim();
-  const scores = {};
-  for (const [cat, data] of Object.entries(CONNAISSANCES_SUPREMES)) {
-    scores[cat] = 0;
-    for (const mot of data.mots) { if (msg.includes(mot)) scores[cat] += mot.length; }
-  }
-  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
-  return best[1] > 0 ? best[0] : "default";
+function simulationApprentissage() {
+  const domaines = Object.keys(MESSAGES_BASE);
+  setInterval(() => {
+    const paysAleatoire = PAYS[Math.floor(Math.random() * PAYS.length)];
+    const domaineAleatoire = domaines[Math.floor(Math.random() * domaines.length)];
+    const questions = QUESTIONS_NIVEAU[domaineAleatoire]?.[1] || [];
+    if (questions.length > 0) {
+      const qAleatoire = questions[Math.floor(Math.random() * questions.length)];
+      const reponseAleatoire = qAleatoire.options[Math.floor(Math.random() * qAleatoire.options.length)];
+      apprendrePattern(paysAleatoire, "En apprentissage", "Simulation", domaineAleatoire, qAleatoire.cle, reponseAleatoire);
+      apprendre(paysAleatoire, domaineAleatoire, qAleatoire.cle, reponseAleatoire);
+    }
+  }, 300000);
 }
 
-function genererReponseSupreme(profilId, message, profilData) {
-  const pays = profilData?.pays || "France";
-  const nom = profilData?.nom || "Voyageur";
-  const historique = db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id=? ORDER BY date DESC LIMIT 15`).all(profilId).reverse();
-  const categorie = analyserMessage(message);
-  const reponses = CONNAISSANCES_SUPREMES[categorie].reponses;
-  const dernieres = historique.filter(h => h.role === 'oracle').map(h => h.message);
-  let disponibles = reponses.filter(r => !dernieres.includes(r));
-  if (disponibles.length === 0) disponibles = [...reponses];
-  let reponse = disponibles[Math.floor(Math.random() * disponibles.length)];
-  if (!reponse.includes(nom)) {
-    reponse = `${nom}, ${reponse.charAt(0).toLowerCase() + reponse.slice(1)}`;
-  }
-  return reponse;
+async function appelerGroq(systemPrompt, userMessage) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        max_tokens: 400,
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }]
+      })
+    });
+    clearTimeout(timeout);
+    if (!r.ok) throw new Error(`Groq ${r.status}`);
+    const data = await r.json();
+    return data.choices[0].message.content;
+  } catch (err) { console.error("Groq échec (fallback activé):", err.message); return null; }
+}
+
+async function appelerGemini(prompt) {
+  try {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 500, responseMimeType: "application/json" }
+      })
+    });
+    if (!r.ok) throw new Error(`Gemini ${r.status}`);
+    const data = await r.json();
+    return JSON.parse(data.candidates[0].content.parts[0].text);
+  } catch (err) { console.error("Gemini échec:", err.message); return null; }
 }
 
 // ==================== ROUTES ====================
@@ -419,14 +832,14 @@ app.post('/api/initier', (req, res) => {
   res.json({ id, domainesConsultes: domainesDuJour, pays: profil.pays });
 });
 
-app.get('/api/pays', (req, res) => res.json(PAYS));
+app.get('/api/pays', (req, res) => res.json(PAYS.map(p => ({ nom: p, desc: "" }))));
 
-app.post('/api/sondage', (req, res) => {
+app.post('/api/sondage', async (req, res) => {
   const { domaine, profilId } = req.body;
   if (!domaine) return res.status(400).json({ error: "Domaine requis." });
   if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
   const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) : {};
-  const { questions, niveau } = genererQuestionsAdaptatives(domaine, profilId, profilData);
+  const { questions, niveau } = await genererQuestionsAdaptatives(domaine, profilId, profilData);
   res.json({ questions, domaine, niveau });
 });
 
@@ -459,7 +872,10 @@ app.post('/api/oracle', async (req, res) => {
     const seed = nom.length + parseInt(age) + Object.values(reponses || {}).join("").length;
     const cartes = tirerCartes();
     const citation = CITATIONS[seed % CITATIONS.length];
-    const messagesEnrichis = genererMessagesEnrichis(domaine, pays, profilId, seed);
+    const promptGemini = `Génère une prédiction de divination en JSON pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Réponds UNIQUEMENT avec ce format JSON exact, rien d'autre : {"principal": "message principal de 2-3 phrases mystiques", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "1-2 phrases"}]}`;
+    const resultatGemini = await appelerGemini(promptGemini);
+    const messagesEnrichis = resultatGemini || genererMessagesEnrichis(domaine, pays, profilId, seed);
+    if (resultatGemini) messagesEnrichis.messagesServis = [];
     const previsions = [
       { domaine: domaine.charAt(0).toUpperCase() + domaine.slice(1), icone: "✨", titre: "Votre Révélation", horizon: "Maintenant", message: messagesEnrichis.principal, principal: true },
       ...messagesEnrichis.complementaires.map(c => ({ ...c, horizon: "À venir" }))
@@ -479,13 +895,48 @@ app.post('/api/supreme', async (req, res) => {
   const { profilId, message } = req.body;
   if (!message) return res.status(400).json({ error: "Message vide." });
   const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) || {} : {};
-  const reponse = genererReponseSupreme(profilId, message, profilData);
+  const nom = profilData?.nom || "Voyageur";
+  const pays = profilData?.pays || "France";
+  const historiqueChat = profilId ? db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId).reverse() : [];
+  const contexteHistorique = historiqueChat.map(h => `${h.role === 'user' ? nom : 'Oracle'}: ${h.message}`).join('\n');
+  const dernieresReponsesOracle = historiqueChat.filter(h => h.role === 'oracle').map(h => h.message).join(' | ');
+  const systemPrompt = `Tu es un oracle mystique qui parle à ${nom} (${pays}). Réponds TOUJOURS en français, ton mystérieux mais chaleureux et INSTRUCTIF : glisse un vrai conseil concret dans la métaphore. Varie ton vocabulaire à chaque fois. Ne réutilise JAMAIS ces phrases déjà dites : ${dernieresReponsesOracle || "aucune"}. Historique récent :\n${contexteHistorique || "aucun"}\nRéponds UNIQUEMENT avec ce JSON exact, sans texte autour, sans balises markdown : {"reponse": "3 à 5 phrases riches et concrètes", "suggestions": ["question de suivi courte 1", "question de suivi courte 2", "question de suivi courte 3"]}`;
+  const brut = await appelerGroq(systemPrompt, message);
+  let reponse, suggestions = [];
+  try {
+    const parsed = JSON.parse((brut || "").replace(/```json|```/g, "").trim());
+    reponse = parsed.reponse; suggestions = parsed.suggestions || [];
+  } catch { reponse = brut || genererReponseSupreme(profilId, message, profilData); }
   const cartes = tirerCartes(1);
   if (profilId) {
     db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
     db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponse);
   }
-  res.json({ reponse, cartes });
+  res.json({ reponse, cartes, suggestions });
 });
+
+// Feedback utilisateur
+app.post('/api/supreme/feedback', (req, res) => {
+  const { profilId, messageId, feedback } = req.body;
+  if (messageId) {
+    db.prepare(`UPDATE conversations_supremes SET feedback = ? WHERE id = ? AND profil_id = ?`).run(feedback, messageId, profilId);
+    
+    // Retrieve the oracle response message
+    const msgRow = db.prepare(`SELECT message FROM conversations_supremes WHERE id = ? AND profil_id = ?`).get(messageId, profilId);
+    if (msgRow && msgRow.message) {
+      const messageText = msgRow.message;
+      // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
+      const frag = db.prepare(`SELECT id, occurrence FROM fragments_appris WHERE type = 'complements' AND texte LIKE ?`).get('%' + messageText + '%');
+      if (frag) {
+        // Increase or decrease occurrence based on feedback
+        const newOccurrence = feedback === 'like' ? frag.occurrence + 1 : Math.max(1, frag.occurrence - 1);
+        db.prepare(`UPDATE fragments_appris SET occurrence = ? WHERE id = ?`).run(newOccurrence, frag.id);
+      }
+    }
+  }
+  res.json({ success: true });
+});
+
+simulationApprentissage();
 
 app.listen(PORT, () => console.log(`🔮 Oracle apprenant sur le port ${PORT}`));
