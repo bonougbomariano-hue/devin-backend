@@ -3,16 +3,21 @@ import cors from 'cors';
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
+
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://le-devin.netlify.app', 'https://localhost', 'capacitor://localhost'],
-  methods: ['POST', 'GET'],
-  allowedHeaders: ['Content-Type']
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
@@ -144,7 +149,6 @@ const ARCANES = [
   "La Maison Dieu","L'Étoile","La Lune","Le Soleil","Le Jugement","Le Monde","Le Mat"
 ];
 
-// ==================== BASE DE CONNAISSANCES ====================
 const MESSAGES_BASE = {
   "chemin de vie": [
     { cle: "bifurcation", texte: "Votre chemin est tracé dans les étoiles, mais vos pas en redessinent les contours. L'Oracle voit une bifurcation majeure approcher." },
@@ -233,8 +237,6 @@ const QUESTIONS_NIVEAU = {
   }
 };
 
-// ==================== MOTEUR DE CONVERSATION INTELLIGENT ====================
-
 const FRAGMENTS = {
   sujets: [
     "Les étoiles", "Les esprits anciens", "Le grand mystère", "Les forces cosmiques",
@@ -273,7 +275,6 @@ const FRAGMENTS = {
   ]
 };
 
-// Détection d'émotions et adaptation du ton
 const EMOTIONS = {
   tristesse: {
     mots: ["triste","pleure","déprimé","seul","malheur","chagrin","peine","désespoir","vide","fatigué","épuisé"],
@@ -313,7 +314,6 @@ const EMOTIONS = {
   }
 };
 
-// Déduction par association (implicite)
 const ASSOCIATIONS = {
   "fatigué": ["tristesse","santé","repos"],
   "malade": ["santé","peur","tristesse"],
@@ -383,6 +383,7 @@ function getMemoire(profilId, cle) {
   const r = db.prepare('SELECT valeur FROM memoire_utilisateur WHERE profil_id = ? AND cle = ?').get(profilId, cle);
   return r ? r.valeur : null;
 }
+
 function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores) {
     try {
         db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, date_maj) 
@@ -416,7 +417,6 @@ function analyserEtApprendre(message, profilId) {
     apprendreFragment('complements', `ce que vous avez partagé : "${extrait}..."`, 'utilisateur');
   }
 
-  // Sauvegarder en mémoire utilisateur
   const emotion = analyserEmotion(message);
   if (emotion !== 'neutre') {
     sauvegarderMemoire(profilId, 'derniere_emotion', emotion);
@@ -436,39 +436,31 @@ function genererReponseSupreme(profilId, message, profilData) {
   const perso = getPersonnalisation(profilId);
   const nom = profilData?.nom || "Voyageur";
 
-  // Apprendre du message
   analyserEtApprendre(message, profilId);
 
-  // Analyser émotion et implicite
   const emotion = analyserEmotion(message);
   const domainesImplicites = analyserImplicite(message);
 
-  // Historique
   const historique = db.prepare(
     'SELECT message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 15'
   ).all(profilId);
   const dernieresReponses = historique.map(h => h.message);
 
-  // Mémoire utilisateur
   const derniereEmotion = getMemoire(profilId, 'derniere_emotion');
   const preferences = db.prepare(
     "SELECT feedback FROM conversations_supremes WHERE profil_id = ? AND feedback IS NOT NULL ORDER BY date DESC LIMIT 20"
   ).all(profilId);
 
-  // Ajuster le ton selon les préférences
   let tonsDisponibles = FRAGMENTS.tons;
   if (preferences.length > 0) {
     const likes = preferences.filter(p => p.feedback === 'like').length;
     const dislikes = preferences.filter(p => p.feedback === 'dislike').length;
     if (dislikes > likes) {
-      // Changer de style si l'utilisateur n'aime pas
       tonsDisponibles = tonsDisponibles.slice().reverse();
     }
   }
 
-  // Sélectionner le ton selon l'émotion et les préférences
   let tonChoisi;
-  // Si l'utilisateur a un style préféré (et ce n'est pas l'équilibré par défaut), on l'utilise pour choisir le ton
   let styleToUse = null;
   if (perso && perso.style_prefere && perso.style_prefere !== 'équilibré') {
     const styleMap = {
@@ -478,17 +470,14 @@ function genererReponseSupreme(profilId, message, profilData) {
       'psychologique': 'philosophique',
       'symbolique': 'philosophique',
       'spirituel': 'mystique',
-      'équilibré': null // utiliser l'émotion
+      'équilibré': null
     };
     styleToUse = styleMap[perso.style_prefere];
   }
-  // Maintenant, choisir le ton en fonction du style à utiliser (ou de l'émotion si pas de préférence)
   if (styleToUse) {
-    // Essayer de trouver un ton correspondant au style souhaité
     const tonCorrespondant = FRAGMENTS.tons.find(t => t.style === styleToUse);
     tonChoisi = tonCorrespondant || FRAGMENTS.tons[Math.floor(Math.random() * FRAGMENTS.tons.length)];
   } else {
-    // Pas de préférence de style, on utilise l'émotion
     if (emotion !== 'neutre') {
       const emotionData = EMOTIONS[emotion];
       tonChoisi = FRAGMENTS.tons.find(t => t.style === emotionData.ton) || FRAGMENTS.tons[Math.floor(Math.random() * FRAGMENTS.tons.length)];
@@ -500,7 +489,6 @@ function genererReponseSupreme(profilId, message, profilData) {
   const dejaUtilises = [];
   let reponse = "";
 
-  // Phrase 1 : Adaptation selon émotion
   if (emotion !== 'neutre') {
     const emotionData = EMOTIONS[emotion];
     const prefixe = emotionData.prefixes[Math.floor(Math.random() * emotionData.prefixes.length)];
@@ -516,7 +504,6 @@ function genererReponseSupreme(profilId, message, profilData) {
     reponse += `${tonChoisi.ouverture} ${sujet1} ${verbe1} ${complement1}. `;
   }
 
-  // Phrase 2 : Connexion avec le contexte
   const connecteur = choisirUnique(getFragments('connecteurs'), dejaUtilises);
   dejaUtilises.push(connecteur);
   const sujet2 = choisirUnique(getFragments('sujets'), dejaUtilises);
@@ -524,7 +511,6 @@ function genererReponseSupreme(profilId, message, profilData) {
 
   reponse += `${connecteur} ${sujet2} ont un message pour vous, ${nom}. `;
 
-  // Phrase 3 : Implicite
   if (domainesImplicites.length > 0) {
     const domaine = domainesImplicites[Math.floor(Math.random() * domainesImplicites.length)];
     const messagesDomaine = {
@@ -540,23 +526,19 @@ function genererReponseSupreme(profilId, message, profilData) {
     }
   }
 
-  // Phrase 4 : Fermeture
   if (pays && pays !== "France") {
     reponse += `Les énergies de ${pays} accompagnent votre chemin. `;
   }
   reponse += `${tonChoisi.fermeture}`;
 
-  // Anti-répétition
   if (dernieresReponses.includes(reponse)) {
     const nouveauComplement = choisirUnique(getFragments('complements'), dejaUtilises);
     reponse = reponse.replace(/\./g, () => Math.random() > 0.5 ? `, ${nouveauComplement}.` : '.');
   }
 
-  // Ajuster la longueur selon les préférences
   if (perso && perso.longueur_preferee > 0) {
     const targetLength = perso.longueur_preferee;
     if (reponse.length > targetLength) {
-      // Trouver la dernière phrase qui ne dépasse pas la longueur cible
       const truncated = reponse.slice(0, targetLength);
       const lastPeriod = truncated.lastIndexOf('.');
       const lastExclamation = truncated.lastIndexOf('!');
@@ -565,34 +547,11 @@ function genererReponseSupreme(profilId, message, profilData) {
       if (lastEnd > 0) {
         reponse = reponse.slice(0, lastEnd + 1);
       } else {
-        // Si pas de ponctuation, on coupe brusquement (pas idéal)
         reponse = truncated;
       }
     }
-    // Si la réponse est trop courte, on pourrait ajouter une phrase générique, mais on ne fait rien pour éviter de dénaturer
   }
 
-  // Ajuster la longueur selon les préférences
-  if (perso && perso.longueur_preferee > 0) {
-    const targetLength = perso.longueur_preferee;
-    if (reponse.length > targetLength) {
-      // Trouver la dernière phrase qui ne dépasse pas la longueur cible
-      const truncated = reponse.slice(0, targetLength);
-      const lastPeriod = truncated.lastIndexOf('.');
-      const lastExclamation = truncated.lastIndexOf('!');
-      const lastQuestion = truncated.lastIndexOf('?');
-      const lastEnd = Math.max(lastPeriod, lastExclamation, lastQuestion);
-      if (lastEnd > 0) {
-        reponse = reponse.slice(0, lastEnd + 1);
-      } else {
-        // Si pas de ponctuation, on coupe brusquement (pas idéal)
-        reponse = truncated;
-      }
-    }
-    // Si la réponse est trop courte, on pourrait ajouter une phrase générique, mais on ne fait rien pour éviter de dénaturer
-  }
-
-  // Apprendre de sa propre réponse
   const phrases = reponse.split(/[.!?]/);
   phrases.forEach(p => {
     if (p.trim().length > 15) {
@@ -603,8 +562,8 @@ function genererReponseSupreme(profilId, message, profilData) {
   return reponse;
 }
 
-// ==================== UTILITAIRES ====================
 function obtenirSigne(age) { return SIGNES[parseInt(age) % 12] || "aries"; }
+
 function tirerCartes(n = 3) {
   const copie = [...ARCANES], tirees = [];
   for (let i = 0; i < n; i++) { const idx = Math.floor(Math.random() * copie.length); tirees.push(copie.splice(idx, 1)[0]); }
@@ -767,8 +726,6 @@ async function appelerGemini(prompt) {
   } catch (err) { console.error("Gemini échec:", err.message); return null; }
 }
 
-// ==================== ROUTES ====================
-
 app.post('/api/initier', (req, res) => {
   const { profil } = req.body;
   if (!profil?.nom) return res.status(400).json({ error: "Profil incomplet." });
@@ -813,30 +770,39 @@ app.post('/api/enregistrer_sondage', (req, res) => {
 });
 
 app.post('/api/oracle', async (req, res) => {
-  const { profileText, profilId, domaine, reponses } = req.body;
-  if (!profileText) return res.status(400).json({ error: "Empreinte introuvable." });
+  const { profilId, domaine, reponses } = req.body;
+  if (!profilId) return res.status(400).json({ error: "Profil ID requis." });
+  if (!domaine) return res.status(400).json({ error: "Domaine requis." });
   if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
+  
   try {
-    const nom = (profileText.match(/nom:\s*([^\n]+)/i) || [])[1]?.trim() || "Voyageur";
-    const age = (profileText.match(/age:\s*([^\n]+)/i) || [])[1]?.trim() || "30";
-    const pays = (profileText.match(/pays:\s*([^\n]+)/i) || [])[1]?.trim() || "France";
+    const profil = db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
+    if (!profil) return res.status(404).json({ error: "Profil non trouvé." });
+
+    const nom = profil.nom || "Voyageur";
+    const age = profil.age || "30";
+    const pays = profil.pays || "France";
     const signe = obtenirSigne(age);
+    
     let aztro = { description: "Les astres tissent leur toile sacrée.", mood: "Mystérieux" };
     try { const r = await fetch(`https://sameerkumar.website/${signe}?day=today`, { method: 'POST' }); if (r.ok) aztro = await r.json(); } catch {}
+    
     const seed = nom.length + parseInt(age) + Object.values(reponses || {}).join("").length;
     const cartes = tirerCartes();
     const citation = CITATIONS[seed % CITATIONS.length];
+    
     const promptGemini = `Génère une prédiction de divination en JSON pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Réponds UNIQUEMENT avec ce format JSON exact, rien d'autre : {"principal": "message principal de 2-3 phrases mystiques", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "1-2 phrases"}]}`;
     const resultatGemini = await appelerGemini(promptGemini);
     const messagesEnrichis = resultatGemini || genererMessagesEnrichis(domaine, pays, profilId, seed);
     if (resultatGemini) messagesEnrichis.messagesServis = [];
+    
     const previsions = [
       { domaine: domaine.charAt(0).toUpperCase() + domaine.slice(1), icone: "✨", titre: "Votre Révélation", horizon: "Maintenant", message: messagesEnrichis.principal, principal: true },
       ...messagesEnrichis.complementaires.map(c => ({ ...c, horizon: "À venir" }))
     ];
+    
     if (profilId) {
-      const profil = db.prepare(`SELECT domaines_consultes FROM profils WHERE id = ?`).get(profilId);
-      const dCons = JSON.parse(profil?.domaines_consultes || '[]');
+      const dCons = JSON.parse(profil.domaines_consultes || '[]');
       dCons.push({ domaine, date: new Date().toISOString() });
       db.prepare(`UPDATE profils SET domaines_consultes = ?, derniere_consultation = datetime('now') WHERE id = ?`).run(JSON.stringify(dCons), profilId);
       db.prepare(`INSERT INTO consultations (profil_id, domaine, question, cartes, humeur, horoscope, citation, previsions, messages_servis) VALUES (?,?,?,?,?,?,?,?,?)`).run(profilId, domaine, JSON.stringify(reponses), JSON.stringify(cartes), aztro.mood, aztro.description, JSON.stringify(citation), JSON.stringify(previsions), JSON.stringify(messagesEnrichis.messagesServis));
@@ -869,21 +835,15 @@ app.post('/api/supreme', async (req, res) => {
   res.json({ reponse, cartes, suggestions });
 });
 
-// Feedback utilisateur
 app.post('/api/supreme/feedback', (req, res) => {
   const { profilId, messageId, feedback } = req.body;
   if (messageId) {
     db.prepare(`UPDATE conversations_supremes SET feedback = ? WHERE id = ? AND profil_id = ?`).run(feedback, messageId, profilId);
-    
-    // Retrieve the oracle response message
     const msgRow = db.prepare(`SELECT message FROM conversations_supremes WHERE id = ? AND profil_id = ?`).get(messageId, profilId);
     if (msgRow && msgRow.message) {
       const messageText = msgRow.message;
-      // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
-            // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
       const frag = db.prepare(`SELECT id, occurrence FROM fragments_appris WHERE type = 'complements' AND texte LIKE ?`).get('%' + messageText + '%');
       if (frag) {
-        // Increase or decrease occurrence based on feedback
         const newOccurrence = feedback === 'like' ? frag.occurrence + 1 : Math.max(1, frag.occurrence - 1);
         db.prepare(`UPDATE fragments_appris SET occurrence = ? WHERE id = ?`).run(newOccurrence, frag.id);
       }
