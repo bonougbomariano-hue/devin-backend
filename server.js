@@ -383,51 +383,6 @@ function getMemoire(profilId, cle) {
   const r = db.prepare('SELECT valeur FROM memoire_utilisateur WHERE profil_id = ? AND cle = ?').get(profilId, cle);
   return r ? r.valeur : null;
 }
-
-function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference) {
-  try {
-    db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, style_preference, date_maj)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(profil_id) DO UPDATE SET
-                    longueur_preferee = excluded.longueur_preferee,
-                    style_prefere = excluded.style_prefere,
-                    ton_prefere = excluded.ton_prefere,
-                    frequence_conseils = excluded.frequence_conseils,
-                    frequence_metaphores = excluded.frequence_metaphores,
-                    style_preference = excluded.style_preference,
-                    date_maj = datetime('now')`).
-      run(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference);
-  } catch (e) {
-    console.error('Error learning personalization:', e);
-  }
-}
-
-function getPersonnalisation(profilId) {
-  return db.prepare(`SELECT * FROM personnalisation WHERE profil_id = ?`).get(profilId);
-}
-
-function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference) {
-  try {
-    db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, style_preference, date_maj)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(profil_id) DO UPDATE SET
-                    longueur_preferee = excluded.longueur_preferee,
-                    style_prefere = excluded.style_prefere,
-                    ton_prefere = excluded.ton_prefere,
-                    frequence_conseils = excluded.frequence_conseils,
-                    frequence_metaphores = excluded.frequence_metaphores,
-                    style_preference = excluded.style_preference,
-                    date_maj = datetime('now')`).
-      run(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference);
-  } catch (e) {
-    console.error('Error learning personalization:', e);
-  }
-}
-
-function getPersonnalisation(profilId) {
-  return db.prepare(`SELECT * FROM personnalisation WHERE profil_id = ?`).get(profilId);
-}
-
 function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores, stylePreference) {
   try {
     db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, style_preference, date_maj)
