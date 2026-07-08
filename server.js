@@ -877,6 +877,7 @@ app.post('/api/supreme/feedback', (req, res) => {
     if (msgRow && msgRow.message) {
       const messageText = msgRow.message;
       // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
+            // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
       const frag = db.prepare(`SELECT id, occurrence FROM fragments_appris WHERE type = 'complements' AND texte LIKE ?`).get('%' + messageText + '%');
       if (frag) {
         // Increase or decrease occurrence based on feedback
