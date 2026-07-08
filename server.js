@@ -656,6 +656,245 @@ function getGroupInsight(profilId) {
     "Éclaireur": "créatifs"
   };
   const groupeLabel = groupeMap[statut] || statut.toLowerCase();
+  return groupeLabel;
+}
+
+async function genererQuestionsAdaptatives(domaine, profilId, profilData) {
+  const niveau = getNiveauProgression(profilId, domaine);
+  const questionsGeneriqueSecours = [
+    { cle: "ressenti_secours_1", question: "Que ressentez-vous face à cette situation ?", options: ["De l'inquiétude","De la confusion","De l'espoir","Une envie d'agir","Un besoin de repos"] },
+    { cle: "attente_secours_1", question: "Qu'attendez-vous vraiment de l'Oracle ici ?", options: ["Une clarté immédiate","Un signe à suivre","Une confirmation","Un conseil concret","Un simple réconfort"] }
+  ];
+
+  if (!profilId) {
+    const base = QUESTIONS_NIVEAU[domaine]?.[1] || questionsGeneriqueSecours;
+    return { questions: base.slice(0, 4), niveau: 1 };
+  }
+
+  const nom = profilData?.nom || "Voyageur";
+  const pays = profilData?.pays || "France";
+  const historiqueBrut = db.prepare(
+    `SELECT question FROM consultations WHERE profil_id = ? AND domaine = ? ORDER BY date DESC LIMIT 3`
+  ).all(profilId, domaine);
+  const historiqueTexte = historiqueBrut.map(h => {
+    try { return Object.entries(JSON.parse(h.question || '{}')).map(([k, v]) => `${k}: ${v}`).join(', '); }
+    catch { return ''; }
+  }).filter(Boolean).join(' | ');
+
+  const promptQuestions = `Tu génères des questions de sondage pour un oracle de divination. Domaine : "${domaine}". Personne : ${nom}, ${pays}. Niveau de profondeur actuel : ${niveau}/3 (1=surface, 3=intime).
+Réponses données lors des visites précédentes dans ce domaine : ${historiqueTexte || "aucune, première visite"}.
+Génère 4 NOUVELLES questions qui font progresser naturellement la relation à partir de ces réponses passées (comme une conversation qui avance dans le temps, jamais une répétition). Chaque question a 5 options de réponse variées et détaillées. Réponds en français, UNIQUEMENT avec ce JSON exact, rien d'autre : {"questions": [{"cle": "identifiant_court_unique", "question": "texte", "options": ["option1","option2","option3","option4","option5"]}]}`;
+
+  const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour, sans balises markdown.", promptQuestions);
+  let questionsFinales = null;
+  try {
+    const parsed = JSON.parse(brut.replace(/```json|```/g, "").trim());
+    if (parsed.questions?.length >= 2) questionsFinales = parsed.questions;
+  } catch {}
+
+  if (!questionsFinales) {
+    questionsFinales = QUESTIONS_NIVEAU[domaine]?.[niveau] || QUESTIONS_NIVEAU[domaine]?.[1] || questionsGeneriqueSecours;
+  }
+
+  const selectionnees = questionsFinales.slice(0, 4).map(q => ({ ...q, options: [...q.options].sort(() => Math.random() - 0.5) }));
+  return { questions: selectionnees, niveau };
+}
+
+function genererMessagesEnrichis(domaine, pays, profilId, seed) {
+  const messagesBase = MESSAGES_BASE[domaine] || MESSAGES_BASE["chemin de vie"];
+  const dejaServis = db.prepare(`SELECT messages_servis FROM consultations WHERE profil_id=? AND domaine=? ORDER BY date DESC LIMIT 5`).all(profilId, domaine).map(c => { try { return JSON.parse(c.messages_servis || '[]'); } catch { return []; } }).flat();
+  const disponibles = messagesBase.filter(m => !dejaServis.includes(m.cle));
+  const messagesChoisis = disponibles.length >= 1 ? disponibles : [...messagesBase];
+  const messagePrincipal = { ...messagesChoisis[seed % messagesChoisis.length] };
+  const autresDomaines = Object.keys(MESSAGES_BASE).filter(d => d !== domaine);
+  const complementaires = autresDomaines.slice(0, 2).map((d, i) => {
+    const msgs = MESSAGES_BASE[d];
+    const msg = msgs[(seed + i + 1) % msgs.length];
+    return { domaine: d.charAt(0).toUpperCase() + d.slice(1), icone: d === "amour" ? "💛" : d === "travail" ? "⚒️" : d === "destin" ? "🌙" : "🦉", titre: d === "amour" ? "Les Liens du Cœur" : d === "travail" ? "Votre Œuvre" : d === "destin" ? "Le Chemin" : "L'Élévation", message: msg.texte };
+  });
+  const tousMessagesServis = [...dejaServis, messagePrincipal.cle];
+  return { principal: messagePrincipal.texte, complementaires, messagesServis: tousMessagesServis };
+}
+
+function simulationApprentissage() {
+  const domaines = Object.keys(MESSAGES_BASE);
+  setInterval(() => {
+    const paysAleatoire = PAYS[Math.floor(Math.random() * PAYS.length)];
+    const domaineAleatoire = domaines[Math.floor(Math.random() * domaines.length)];
+    const questions = QUESTIONS_NIVEAU[domaineAleatoire]?.[1] || [];
+    if (questions.length > 0) {
+      const qAleatoire = questions[Math.floor(Math.random() * questions.length)];
+      const reponseAleatoire = qAleatoire.options[Math.floor(Math.random() * qAleatoire.options.length)];
+      apprendrePattern(paysAleatoire, "En apprentissage", "Simulation", domaineAleatoire, qAleatoire.cle, reponseAleatoire);
+      apprendre(paysAleatoire, domaineAleatoire, qAleatoire.cle, reponseAleatoire);
+    }
+  }, 300000);
+}
+
+async function appelerGroq(systemPrompt, userMessage) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        max_tokens: 400,
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }]
+      })
+    });
+    clearTimeout(timeout);
+    if (!r.ok) throw new Error(`Groq ${r.status}`);
+    const data = await r.json();
+    return data.choices[0].message.content;
+  } catch (err) { console.error("Groq échec (fallback activé):", err.message); return null; }
+}
+
+async function appelerGemini(prompt) {
+  try {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 500, responseMimeType: "application/json" }
+      })
+    });
+    if (!r.ok) throw new Error(`Gemini ${r.status}`);
+    const data = await r.json();
+    return JSON.parse(data.candidates[0].content.parts[0].text);
+  } catch (err) { console.error("Gemini échec:", err.message); return null; }
+}
+
+// ==================== ROUTES ====================
+
+app.post('/api/initier', (req, res) => {
+  const { profil } = req.body;
+  if (!profil?.nom) return res.status(400).json({ error: "Profil incomplet." });
+  const existant = db.prepare(`SELECT id, domaines_consultes FROM profils WHERE nom = ? AND pays = ?`).get(profil.nom, profil.pays);
+  let id;
+  if (existant) {
+    db.prepare(`UPDATE profils SET age=?, statut=?, profession=?, offrande=?, lune=?, element=? WHERE id=?`).run(profil.age, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, existant.id);
+    id = existant.id;
+  } else {
+    id = db.prepare(`INSERT INTO profils (nom,age,pays,statut,profession,offrande,lune,element) VALUES (?,?,?,?,?,?,?,?)`).run(profil.nom, profil.age, profil.pays, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element).lastInsertRowid;
+  }
+  const domainesConsultes = JSON.parse(existant?.domaines_consultes || '[]');
+  const aujourdhui = new Date().toDateString();
+  const domainesDuJour = domainesConsultes.filter(d => new Date(d.date).toDateString() === aujourdhui).map(d => d.domaine);
+  res.json({ id, domainesConsultes: domainesDuJour, pays: profil.pays });
+});
+
+app.get('/api/pays', (req, res) => res.json(PAYS.map(p => ({ nom: p, desc: "" }))));
+
+app.post('/api/sondage', async (req, res) => {
+  const { domaine, profilId } = req.body;
+  if (!domaine) return res.status(400).json({ error: "Domaine requis." });
+  if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
+  const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) : {};
+  const { questions, niveau } = await genererQuestionsAdaptatives(domaine, profilId, profilData);
+  res.json({ questions, domaine, niveau });
+});
+
+app.post('/api/enregistrer_sondage', (req, res) => {
+  const { domaine, profilId, reponses } = req.body;
+  if (profilId) {
+    const profil = db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
+    if (profil) {
+      Object.entries(reponses).forEach(([cle, valeur]) => {
+        apprendre(profil.pays, domaine, cle, valeur);
+        apprendrePattern(profil.pays, profil.statut, profil.profession, domaine, cle, valeur);
+      });
+      incrementerProgression(profilId, domaine);
+    }
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/oracle', async (req, res) => {
+  const { profileText, profilId, domaine, reponses } = req.body;
+  if (!profileText) return res.status(400).json({ error: "Empreinte introuvable." });
+  if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
+  try {
+    const nom = (profileText.match(/nom:\s*([^\n]+)/i) || [])[1]?.trim() || "Voyageur";
+    const age = (profileText.match(/age:\s*([^\n]+)/i) || [])[1]?.trim() || "30";
+    const pays = (profileText.match(/pays:\s*([^\n]+)/i) || [])[1]?.trim() || "France";
+    const signe = obtenirSigne(age);
+    let aztro = { description: "Les astres tissent leur toile sacrée.", mood: "Mystérieux" };
+    try { const r = await fetch(`https://sameerkumar.website/${signe}?day=today`, { method: 'POST' }); if (r.ok) aztro = await r.json(); } catch {}
+    const seed = nom.length + parseInt(age) + Object.values(reponses || {}).join("").length;
+    const cartes = tirerCartes();
+    const citation = CITATIONS[seed % CITATIONS.length];
+    const promptGemini = `Génère une prédiction de divination en JSON pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Réponds UNIQUEMENT avec ce format JSON exact, rien d'autre : {"principal": "message principal de 2-3 phrases mystiques", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "1-2 phrases"}]}`;
+    const resultatGemini = await appelerGemini(promptGemini);
+    const messagesEnrichis = resultatGemini || genererMessagesEnrichis(domaine, pays, profilId, seed);
+    if (resultatGemini) messagesEnrichis.messagesServis = [];
+    const previsions = [
+      { domaine: domaine.charAt(0).toUpperCase() + domaine.slice(1), icone: "✨", titre: "Votre Révélation", horizon: "Maintenant", message: messagesEnrichis.principal, principal: true },
+      ...messagesEnrichis.complementaires.map(c => ({ ...c, horizon: "À venir" }))
+    ];
+    if (profilId) {
+      const profil = db.prepare(`SELECT domaines_consultes FROM profils WHERE id = ?`).get(profilId);
+      const dCons = JSON.parse(profil?.domaines_consultes || '[]');
+      dCons.push({ domaine, date: new Date().toISOString() });
+      db.prepare(`UPDATE profils SET domaines_consultes = ?, derniere_consultation = datetime('now') WHERE id = ?`).run(JSON.stringify(dCons), profilId);
+      db.prepare(`INSERT INTO consultations (profil_id, domaine, question, cartes, humeur, horoscope, citation, previsions, messages_servis) VALUES (?,?,?,?,?,?,?,?,?)`).run(profilId, domaine, JSON.stringify(reponses), JSON.stringify(cartes), aztro.mood, aztro.description, JSON.stringify(citation), JSON.stringify(previsions), JSON.stringify(messagesEnrichis.messagesServis));
+    }
+    res.json({ nom, signe, humeur: aztro.mood, horoscope: aztro.description, cartes, citation, previsions, domaine });
+  } catch (err) { console.error(err); res.status(500).json({ error: "Le voile s'épaissit." }); }
+});
+
+app.post('/api/supreme', async (req, res) => {
+  const { profilId, message } = req.body;
+  if (!message) return res.status(400).json({ error: "Message vide." });
+  const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) || {} : {};
+  const nom = profilData?.nom || "Voyageur";
+  const pays = profilData?.pays || "France";
+  const historiqueChat = profilId ? db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId).reverse() : [];
+  const contexteHistorique = historiqueChat.map(h => `${h.role === 'user' ? nom : 'Oracle'}: ${h.message}`).join('\n');
+  const dernieresReponsesOracle = historiqueChat.filter(h => h.role === 'oracle').map(h => h.message).join(' | ');
+  const systemPrompt = `Tu es un oracle mystique qui parle à ${nom} (${pays}). Réponds TOUJOURS en français, ton mystérieux mais chaleureux et INSTRUCTIF : glisse un vrai conseil concret dans la métaphore. Varie ton vocabulaire à chaque fois. Ne réutilise JAMAIS ces phrases déjà dites : ${dernieresReponsesOracle || "aucune"}. Historique récent :\n${contexteHistorique || "aucun"}\nRéponds UNIQUEMENT avec ce JSON exact, sans texte autour, sans balises markdown : {"reponse": "3 à 5 phrases riches et concrètes", "suggestions": ["question de suivi courte 1", "question de suivi courte 2", "question de suivi courte 3"]}`;
+  const brut = await appelerGroq(systemPrompt, message);
+  let reponse, suggestions = [];
+  try {
+    const parsed = JSON.parse((brut || "").replace(/```json|```/g, "").trim());
+    reponse = parsed.reponse; suggestions = parsed.suggestions || [];
+  } catch { reponse = brut || genererReponseSupreme(profilId, message, profilData); }
+  const cartes = tirerCartes(1);
+  if (profilId) {
+    db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
+    db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponse);
+  }
+  res.json({ reponse, cartes, suggestions });
+});
+
+// Feedback utilisateur
+app.post('/api/supreme/feedback', (req, res) => {
+  const { profilId, messageId, feedback } = req.body;
+  if (messageId) {
+    db.prepare(`UPDATE conversations_supremes SET feedback = ? WHERE id = ? AND profil_id = ?`).run(feedback, messageId, profilId);
+    
+    // Retrieve the oracle response message
+    const msgRow = db.prepare(`SELECT message FROM conversations_supremes WHERE id = ? AND profil_id = ?`).get(messageId, profilId);
+    if (msgRow && msgRow.message) {
+      const messageText = msgRow.message;
+      // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
+            // Find a fragment in fragments_appris of type 'complements' that matches the message text (or part of it)
+      const frag = db.prepare(`SELECT id, occurrence FROM fragments_appris WHERE type = 'complements' AND texte LIKE ?`).get('%' + messageText + '%');
+      if (frag) {
+        // Increase or decrease occurrence based on feedback
+        const newOccurrence = feedback === 'like' ? frag.occurrence + 1 : Math.max(1, frag.occurrence - 1);
+        db.prepare(`UPDATE fragments_appris SET occurrence = ? WHERE id = ?`).run(newOccurrence, frag.id);
+      }
+    }
+  }
+  res.json({ success: true });
+});
+
+simulationApprentissage();
+
+app.listen(PORT, () => console.log(`🔮 Oracle apprenant sur le port ${PORT}`));
   async function genererQuestionsAdaptatives(domaine, profilId, profilData) {
   const niveau = getNiveauProgression(profilId, domaine);
   const questionsGeneriqueSecours = [
