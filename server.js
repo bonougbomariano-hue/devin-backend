@@ -791,10 +791,7 @@ app.post('/api/oracle', async (req, res) => {
     const cartes = tirerCartes();
     const citation = CITATIONS[seed % CITATIONS.length];
     
-    const promptGemini = `Génère une prédiction de divination en JSON pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Réponds UNIQUEMENT avec ce format JSON exact, rien d'autre : {"principal": "message principal de 2-3 phrases mystiques", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "1-2 phrases"}]}`;
-    const resultatGemini = await appelerGemini(promptGemini);
-    const messagesEnrichis = resultatGemini || genererMessagesEnrichis(domaine, pays, profilId, seed);
-    if (resultatGemini) messagesEnrichis.messagesServis = [];
+    const messagesEnrichis = genererMessagesEnrichis(domaine, pays, profilId, seed);
     
     const previsions = [
       { domaine: domaine.charAt(0).toUpperCase() + domaine.slice(1), icone: "✨", titre: "Votre Révélation", horizon: "Maintenant", message: messagesEnrichis.principal, principal: true },
