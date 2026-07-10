@@ -120,6 +120,14 @@ db.exec(`
     date_maj TEXT DEFAULT (datetime('now')),
     FOREIGN KEY(profil_id) REFERENCES profils(id)
   );
+  CREATE TABLE IF NOT EXISTS tirages_sixieme_sens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profil_id INTEGER,
+    cartes_ids TEXT,
+    cle_cache TEXT,
+    revelation TEXT,
+    date TEXT DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 const SIGNES = ["aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"];
@@ -148,6 +156,16 @@ const ARCANES = [
   "La Force","Le Pendu","La Mort","Tempérance","Le Diable",
   "La Maison Dieu","L'Étoile","La Lune","Le Soleil","Le Jugement","Le Monde","Le Mat"
 ];
+
+const SYMBOLES_SIXIEME_SENS = ["🕯️","🌀","🔮","🦋","🌑","⚡","🩸","🌿","🗝️","🌊"];
+const ESSENCES_SIXIEME_SENS = ["Éveil","Chute","Seuil","Écho","Reflet","Silence","Tempête","Racine","Passage","Murmure"];
+const CARTES_SIXIEME_SENS = [];
+let idCarteSS = 0;
+for (const essence of ESSENCES_SIXIEME_SENS) {
+  for (const symbole of SYMBOLES_SIXIEME_SENS) {
+    CARTES_SIXIEME_SENS.push({ id: idCarteSS++, symbole, nom: essence });
+  }
+}
 
 const MESSAGES_BASE = {
   "chemin de vie": [
@@ -806,6 +824,89 @@ app.post('/api/oracle', async (req, res) => {
     }
     res.json({ nom, signe, humeur: aztro.mood, horoscope: aztro.description, cartes, citation, previsions, domaine });
   } catch (err) { console.error(err); res.status(500).json({ error: "Le voile s'épaissit." }); }
+});
+
+app.get('/api/sixieme-sens/cartes', (req, res) => {
+  res.json({ cartes: CARTES_SIXIEME_SENS });
+});
+
+app.post('/api/sixieme-sens/revelation', async (req, res) => {
+  const { profilId, cartesChoisies } = req.body;
+  if (!profilId || !Array.isArray(cartesChoisies) || cartesChoisies.length !== 3) {
+    return res.status(400).json({ error: "Trois cartes sont requises." });
+  }
+
+  const aujourdHui = new Date().toISOString().slice(0, 10);
+  const tiragesAujourdhui = db.prepare(
+    `SELECT COUNT(*) as n FROM tirages_sixieme_sens WHERE profil_id = ? AND date(date) = ?`
+  ).get(profilId, aujourdHui).n;
+
+  if (tiragesAujourdhui >= 3) {
+    return res.json({
+      verrouille: true,
+      message: "Le destin se referme pour aujourd'hui. Forcer ses portes ne ferait que vous répéter ce que vous préférez entendre, non ce que vous devez savoir. Revenez demain, l'esprit apaisé."
+    });
+  }
+
+  const profil = db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
+  if (!profil) return res.status(404).json({ error: "Profil non trouvé." });
+
+  const nom = profil.nom || "Voyageur";
+  const age = profil.age || "30";
+  const pays = profil.pays || "France";
+  const signe = obtenirSigne(age);
+
+  const cleCache = `${profilId}_${aujourdHui}_${cartesChoisies.join('-')}`;
+  const dejaCalcule = db.prepare(`SELECT revelation FROM tirages_sixieme_sens WHERE cle_cache = ?`).get(cleCache);
+  if (dejaCalcule) {
+    return res.json({ verrouille: false, revelation: dejaCalcule.revelation, cartes: cartesChoisies, tiragesRestants: 3 - tiragesAujourdhui - 1 >= 0 ? 2 - tiragesAujourdhui : 0 });
+  }
+
+  let aztro = { description: "Les astres restent silencieux aujourd'hui.", mood: "Mystérieux" };
+  try { const r = await fetch(`https://sameerkumar.website/${signe}?day=today`, { method: 'POST' }); if (r.ok) aztro = await r.json(); } catch {}
+
+  let meteo = "Le ciel garde son secret.";
+  try {
+    const controllerM = new AbortController();
+    const timeoutM = setTimeout(() => controllerM.abort(), 5000);
+    const rMeteo = await fetch(`https://wttr.in/${encodeURIComponent(pays)}?format=3`, { signal: controllerM.signal });
+    clearTimeout(timeoutM);
+    if (rMeteo.ok) meteo = await rMeteo.text();
+  } catch {}
+
+  const historique = db.prepare(
+    `SELECT domaine, question, date FROM consultations WHERE profil_id = ? ORDER BY date DESC LIMIT 5`
+  ).all(profilId);
+  const historiqueTexte = historique.map(h => {
+    try { return `${h.domaine}: ${Object.values(JSON.parse(h.question || '{}')).join(', ')}`; }
+    catch { return h.domaine; }
+  }).join(' | ');
+
+  const cartesDetail = cartesChoisies.map((id, i) => {
+    const c = CARTES_SIXIEME_SENS.find(x => x.id === id);
+    return `Position ${i + 1}: ${c?.nom} ${c?.symbole}`;
+  }).join(', ');
+
+  const promptSS = `Tu es un oracle du sixième sens, à la fois mystique et extrêmement concret. Personne : ${nom}, ${age} ans, ${pays}, signe ${signe}.
+Horoscope du jour : ${aztro.description} (humeur : ${aztro.mood}).
+Météo actuelle : ${meteo}.
+Historique récent de la personne dans l'app : ${historiqueTexte || "aucun"}.
+Cartes tirées, dans l'ordre choisi (l'ordre a un sens narratif : présent → chemin → issue) : ${cartesDetail}.
+Génère une révélation en français qui mélange intuition mystique ET conseils pratiques concrets et actionnables du quotidien (ex : "prends un parapluie", "ménage-toi au travail aujourd'hui", "porte du rouge", "inspire 5 secondes avant de monter sur scène", "évite ce chemin ce soir"). Base-toi vraiment sur la météo et l'horoscope donnés. 4 à 6 phrases, ton confiant et bienveillant. Réponds UNIQUEMENT avec ce JSON, rien d'autre : {"revelation": "texte complet ici"}`;
+
+  const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour.", promptSS);
+  let revelation;
+  try {
+    revelation = JSON.parse((brut || "").replace(/```json|```/g, "").trim()).revelation;
+  } catch { revelation = null; }
+  if (!revelation) {
+    revelation = `Les cartes ${cartesDetail} dessinent un chemin incertain mais porteur. ${aztro.description} Restez attentif aux signes du jour et faites confiance à votre instinct.`;
+  }
+
+  db.prepare(`INSERT INTO tirages_sixieme_sens (profil_id, cartes_ids, cle_cache, revelation) VALUES (?, ?, ?, ?)`)
+    .run(profilId, JSON.stringify(cartesChoisies), cleCache, revelation);
+
+  res.json({ verrouille: false, revelation, cartes: cartesChoisies, tiragesRestants: 2 - tiragesAujourdhui });
 });
 
 app.post('/api/supreme', async (req, res) => {
