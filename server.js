@@ -32,6 +32,7 @@ db.exec(`
     domaines_consultes TEXT DEFAULT '[]',
     derniere_consultation TEXT,
     cycle_progression INTEGER DEFAULT 1,
+    date_naissance TEXT,
     abonne INTEGER DEFAULT 0,
     cree_le TEXT DEFAULT CURRENT_TIMESTAMP
   );
@@ -580,7 +581,21 @@ function genererReponseSupreme(profilId, message, profilData) {
   return reponse;
 }
 
-function obtenirSigne(age) { return SIGNES[parseInt(age) % 12] || "aries"; }
+function obtenirSigne(age, dateNaissance) {
+  if (dateNaissance) {
+    const d = new Date(dateNaissance);
+    const jour = d.getDate(), mois = d.getMonth() + 1;
+    const tranches = [
+      [120, "capricorn"], [219, "aquarius"], [320, "pisces"], [420, "aries"],
+      [521, "taurus"], [621, "gemini"], [723, "cancer"], [823, "leo"],
+      [923, "virgo"], [1023, "libra"], [1122, "scorpio"], [1222, "sagittarius"], [1231, "capricorn"]
+    ];
+    const cle = mois * 100 + jour;
+    for (const [limite, signe] of tranches) { if (cle <= limite) return signe; }
+    return "capricorn";
+  }
+  return SIGNES[parseInt(age) % 12] || "aries";
+}
 
 function tirerCartes(n = 3) {
   const copie = [...ARCANES], tirees = [];
@@ -750,10 +765,10 @@ app.post('/api/initier', (req, res) => {
   const existant = db.prepare(`SELECT id, domaines_consultes FROM profils WHERE nom = ? AND pays = ?`).get(profil.nom, profil.pays);
   let id;
   if (existant) {
-    db.prepare(`UPDATE profils SET age=?, statut=?, profession=?, offrande=?, lune=?, element=? WHERE id=?`).run(profil.age, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, existant.id);
+    db.prepare(`UPDATE profils SET age=?, statut=?, profession=?, offrande=?, lune=?, element=?, date_naissance=? WHERE id=?`).run(profil.age, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, profil.dateNaissance || null, existant.id);
     id = existant.id;
   } else {
-    id = db.prepare(`INSERT INTO profils (nom,age,pays,statut,profession,offrande,lune,element) VALUES (?,?,?,?,?,?,?,?)`).run(profil.nom, profil.age, profil.pays, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element).lastInsertRowid;
+    id = db.prepare(`INSERT INTO profils (nom,age,pays,statut,profession,offrande,lune,element,date_naissance) VALUES (?,?,?,?,?,?,?,?,?)`).run(profil.nom, profil.age, profil.pays, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, profil.dateNaissance || null).lastInsertRowid;
   }
   const domainesConsultes = JSON.parse(existant?.domaines_consultes || '[]');
   const aujourdhui = new Date().toDateString();
@@ -800,7 +815,8 @@ app.post('/api/oracle', async (req, res) => {
     const nom = profil.nom || "Voyageur";
     const age = profil.age || "30";
     const pays = profil.pays || "France";
-    const signe = obtenirSigne(age);
+    const dateNaissance = profil.date_naissance || null;
+    const signe = obtenirSigne(age, dateNaissance);
     
     let aztro = { description: "Les astres tissent leur toile sacrée.", mood: "Mystérieux" };
     try { const r = await fetch(`https://sameerkumar.website/${signe}?day=today`, { method: 'POST' }); if (r.ok) aztro = await r.json(); } catch {}
@@ -808,8 +824,16 @@ app.post('/api/oracle', async (req, res) => {
     const seed = nom.length + parseInt(age) + Object.values(reponses || {}).join("").length;
     const cartes = tirerCartes();
     const citation = CITATIONS[seed % CITATIONS.length];
-    
-    const messagesEnrichis = genererMessagesEnrichis(domaine, pays, profilId, seed);
+
+    const contexteReponses = Object.entries(reponses || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+    const promptOracle = `Tu es un oracle mystique. Génère une prédiction pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Horoscope du jour : ${aztro.description}. Contexte donné par la personne : ${contexteReponses || "aucun"}. Exploite concrètement ce contexte, varie le vocabulaire à chaque fois, glisse un vrai conseil actionnable dans la métaphore. Réponds en français, UNIQUEMENT avec ce JSON exact, rien d'autre : {"principal": "message principal de 3-4 phrases mystiques et concrètes", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "2 phrases"}]}`;
+    const brutOracle = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour.", promptOracle);
+    let messagesEnrichis;
+    try {
+      const parsed = JSON.parse((brutOracle || "").replace(/```json|```/g, "").trim());
+      messagesEnrichis = parsed.principal ? { principal: parsed.principal, complementaires: parsed.complementaires || [], messagesServis: [] } : null;
+    } catch { messagesEnrichis = null; }
+    if (!messagesEnrichis) messagesEnrichis = genererMessagesEnrichis(domaine, pays, profilId, seed);
     
     const previsions = [
       { domaine: domaine.charAt(0).toUpperCase() + domaine.slice(1), icone: "✨", titre: "Votre Révélation", horizon: "Maintenant", message: messagesEnrichis.principal, principal: true },
@@ -854,7 +878,8 @@ app.post('/api/sixieme-sens/revelation', async (req, res) => {
   const nom = profil.nom || "Voyageur";
   const age = profil.age || "30";
   const pays = profil.pays || "France";
-  const signe = obtenirSigne(age);
+  const dateNaissance = profil.date_naissance || null;
+  const signe = obtenirSigne(age, dateNaissance);
 
   const cleCache = `${profilId}_${aujourdHui}_${cartesChoisies.join('-')}`;
   const dejaCalcule = db.prepare(`SELECT revelation FROM tirages_sixieme_sens WHERE cle_cache = ?`).get(cleCache);
