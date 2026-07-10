@@ -158,13 +158,23 @@ const ARCANES = [
   "La Maison Dieu","L'Étoile","La Lune","Le Soleil","Le Jugement","Le Monde","Le Mat"
 ];
 
-const SYMBOLES_SIXIEME_SENS = ["🕯️","🌀","🔮","🦋","🌑","⚡","🩸","🌿","🗝️","🌊"];
-const ESSENCES_SIXIEME_SENS = ["Éveil","Chute","Seuil","Écho","Reflet","Silence","Tempête","Racine","Passage","Murmure"];
+const THEMES_SIXIEME_SENS = [
+  { nom: "Amour", couleur: "#c9506b" },
+  { nom: "Chance", couleur: "#9b6bc9" },
+  { nom: "Succès", couleur: "#d4af37" },
+  { nom: "Santé", couleur: "#6bc98a" },
+  { nom: "Pouvoir", couleur: "#8b1e2b" },
+  { nom: "Création", couleur: "#d97a3f" },
+  { nom: "Voyage", couleur: "#4a7fc9" },
+  { nom: "Renouveau", couleur: "#9aa0a6" },
+  { nom: "Mystère", couleur: "#5b4b9c" },
+  { nom: "Sagesse", couleur: "#e8d9a8" }
+];
 const CARTES_SIXIEME_SENS = [];
 let idCarteSS = 0;
-for (const essence of ESSENCES_SIXIEME_SENS) {
-  for (const symbole of SYMBOLES_SIXIEME_SENS) {
-    CARTES_SIXIEME_SENS.push({ id: idCarteSS++, symbole, nom: essence });
+for (const theme of THEMES_SIXIEME_SENS) {
+  for (let variante = 0; variante < 10; variante++) {
+    CARTES_SIXIEME_SENS.push({ id: idCarteSS++, theme: theme.nom, couleur: theme.couleur, nom: theme.nom });
   }
 }
 
@@ -651,7 +661,7 @@ function getGroupInsight(profilId) {
   return groupeLabel;
 }
 
-async function genererQuestionsAdaptatives(domaine, profilId, profilData) {
+async function genererQuestionsAdaptatives(domaine, profilId, profilData, langueCible = 'fr') {
   const niveau = getNiveauProgression(profilId, domaine);
   const questionsGeneriqueSecours = [
     { cle: "ressenti_secours_1", question: "Que ressentez-vous face à cette situation ?", options: ["De l'inquiétude","De la confusion","De l'espoir","Une envie d'agir","Un besoin de repos"] },
@@ -675,7 +685,7 @@ async function genererQuestionsAdaptatives(domaine, profilId, profilData) {
 
   const promptQuestions = `Tu génères des questions de sondage pour un oracle de divination. Domaine : "${domaine}". Personne : ${nom}, ${pays}. Niveau de profondeur actuel : ${niveau}/3 (1=surface, 3=intime).
 Réponses données lors des visites précédentes dans ce domaine : ${historiqueTexte || "aucune, première visite"}.
-Génère 4 NOUVELLES questions qui font progresser naturellement la relation à partir de ces réponses passées (comme une conversation qui avance dans le temps, jamais une répétition). Chaque question a 5 options de réponse variées et détaillées. Réponds en français, UNIQUEMENT avec ce JSON exact, rien d'autre : {"questions": [{"cle": "identifiant_court_unique", "question": "texte", "options": ["option1","option2","option3","option4","option5"]}]}`;
+Génère 4 NOUVELLES questions qui font progresser naturellement la relation à partir de ces réponses passées (comme une conversation qui avance dans le temps, jamais une répétition). Chaque question a 5 options de réponse variées et détaillées. Réponds impérativement dans la langue de code ISO "${langueCible}". UNIQUEMENT avec ce JSON exact, rien d'autre : {"questions": [{"cle": "identifiant_court_unique", "question": "texte", "options": ["option1","option2","option3","option4","option5"]}]}`;
 
   const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour, sans balises markdown.", promptQuestions);
   let questionsFinales = null;
@@ -779,11 +789,11 @@ app.post('/api/initier', (req, res) => {
 app.get('/api/pays', (req, res) => res.json(PAYS.map(p => ({ nom: p, desc: "" }))));
 
 app.post('/api/sondage', async (req, res) => {
-  const { domaine, profilId } = req.body;
+  const { domaine, profilId, langue } = req.body;
   if (!domaine) return res.status(400).json({ error: "Domaine requis." });
   if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
   const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) : {};
-  const { questions, niveau } = await genererQuestionsAdaptatives(domaine, profilId, profilData);
+  const { questions, niveau } = await genererQuestionsAdaptatives(domaine, profilId, profilData, langue || 'fr');
   res.json({ questions, domaine, niveau });
 });
 
@@ -803,7 +813,8 @@ app.post('/api/enregistrer_sondage', (req, res) => {
 });
 
 app.post('/api/oracle', async (req, res) => {
-  const { profilId, domaine, reponses } = req.body;
+  const { profilId, domaine, reponses, langue } = req.body;
+  const langueCible = langue || 'fr';
   if (!profilId) return res.status(400).json({ error: "Profil ID requis." });
   if (!domaine) return res.status(400).json({ error: "Domaine requis." });
   if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
@@ -826,7 +837,7 @@ app.post('/api/oracle', async (req, res) => {
     const citation = CITATIONS[seed % CITATIONS.length];
 
     const contexteReponses = Object.entries(reponses || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
-    const promptOracle = `Tu es un oracle mystique. Génère une prédiction pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Horoscope du jour : ${aztro.description}. Contexte donné par la personne : ${contexteReponses || "aucun"}. Exploite concrètement ce contexte, varie le vocabulaire à chaque fois, glisse un vrai conseil actionnable dans la métaphore. Réponds en français, UNIQUEMENT avec ce JSON exact, rien d'autre : {"principal": "message principal de 3-4 phrases mystiques et concrètes", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "2 phrases"}]}`;
+    const promptOracle = `Tu es un oracle mystique. Réponds impérativement dans la langue de code ISO "${langueCible}". Génère une prédiction pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Horoscope du jour : ${aztro.description}. Contexte donné par la personne : ${contexteReponses || "aucun"}. Exploite concrètement ce contexte, varie le vocabulaire à chaque fois, glisse un vrai conseil actionnable dans la métaphore. UNIQUEMENT avec ce JSON exact, rien d'autre : {"principal": "message principal de 3-4 phrases mystiques et concrètes", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "2 phrases"}]}`;
     const brutOracle = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour.", promptOracle);
     let messagesEnrichis;
     try {
@@ -855,7 +866,8 @@ app.get('/api/sixieme-sens/cartes', (req, res) => {
 });
 
 app.post('/api/sixieme-sens/revelation', async (req, res) => {
-  const { profilId, cartesChoisies } = req.body;
+  const { profilId, cartesChoisies, langue } = req.body;
+  const langueCible = langue || 'fr';
   if (!profilId || !Array.isArray(cartesChoisies) || cartesChoisies.length !== 3) {
     return res.status(400).json({ error: "Trois cartes sont requises." });
   }
@@ -909,15 +921,14 @@ app.post('/api/sixieme-sens/revelation', async (req, res) => {
 
   const cartesDetail = cartesChoisies.map((id, i) => {
     const c = CARTES_SIXIEME_SENS.find(x => x.id === id);
-    return `Position ${i + 1}: ${c?.nom} ${c?.symbole}`;
+    return `Position ${i + 1}: ${c?.nom} ${c?.theme}`;
   }).join(', ');
 
-  const promptSS = `Tu es un oracle du sixième sens, à la fois mystique et extrêmement concret. Personne : ${nom}, ${age} ans, ${pays}, signe ${signe}.
-Horoscope du jour : ${aztro.description} (humeur : ${aztro.mood}).
-Météo actuelle : ${meteo}.
+  const promptSS = `Tu es un oracle du sixième sens, à la fois mystique et extrêmement concret. Réponds impérativement dans la langue de code ISO "${langueCible}". Personne : ${nom}, ${age} ans, ${pays}, signe ${signe}.
+Signes captés par l'Oracle (usage interne uniquement, à traduire mystérieusement, JAMAIS à citer tels quels, jamais de degrés ni le mot "météo" ni "horoscope") : ambiance céleste = ${aztro.description} (humeur : ${aztro.mood}) ; état du ciel = ${meteo}.
 Historique récent de la personne dans l'app : ${historiqueTexte || "aucun"}.
 Cartes tirées, dans l'ordre choisi (l'ordre a un sens narratif : présent → chemin → issue) : ${cartesDetail}.
-Génère une révélation en français qui mélange intuition mystique ET conseils pratiques concrets et actionnables du quotidien (ex : "prends un parapluie", "ménage-toi au travail aujourd'hui", "porte du rouge", "inspire 5 secondes avant de monter sur scène", "évite ce chemin ce soir"). Base-toi vraiment sur la météo et l'horoscope donnés. 4 à 6 phrases, ton confiant et bienveillant. Réponds UNIQUEMENT avec ce JSON, rien d'autre : {"revelation": "texte complet ici"}`;
+Génère une révélation qui mélange intuition mystique ET conseils pratiques concrets et actionnables du quotidien (ex : "prends un parapluie", "ménage-toi au travail aujourd'hui", "porte du rouge", "inspire 5 secondes avant de monter sur scène", "évite ce chemin ce soir"). Traduis les signes captés en formulations mystérieuses ("le ciel te met en garde", "les éléments s'agitent", "une ombre plane sur ta journée") — ne mentionne JAMAIS explicitement la météo, un degré de température, ou le mot "horoscope". 4 à 6 phrases, ton confiant et énigmatique. Réponds UNIQUEMENT avec ce JSON, rien d'autre : {"revelation": "texte complet ici"}`;
 
   const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour.", promptSS);
   let revelation;
@@ -935,7 +946,8 @@ Génère une révélation en français qui mélange intuition mystique ET consei
 });
 
 app.post('/api/supreme', async (req, res) => {
-  const { profilId, message } = req.body;
+  const { profilId, message, langue } = req.body;
+  const langueCible = langue || 'fr';
   if (!message) return res.status(400).json({ error: "Message vide." });
   const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) || {} : {};
   const nom = profilData?.nom || "Voyageur";
@@ -943,7 +955,7 @@ app.post('/api/supreme', async (req, res) => {
   const historiqueChat = profilId ? db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId).reverse() : [];
   const contexteHistorique = historiqueChat.map(h => `${h.role === 'user' ? nom : 'Oracle'}: ${h.message}`).join('\n');
   const dernieresReponsesOracle = historiqueChat.filter(h => h.role === 'oracle').map(h => h.message).join(' | ');
-  const systemPrompt = `Tu es un oracle mystique qui parle à ${nom} (${pays}). Réponds TOUJOURS en français, ton mystérieux mais chaleureux et INSTRUCTIF : glisse un vrai conseil concret dans la métaphore. Varie ton vocabulaire à chaque fois. Ne réutilise JAMAIS ces phrases déjà dites : ${dernieresReponsesOracle || "aucune"}. Historique récent :\n${contexteHistorique || "aucun"}\nRéponds UNIQUEMENT avec ce JSON exact, sans texte autour, sans balises markdown : {"reponse": "3 à 5 phrases riches et concrètes", "suggestions": ["question de suivi courte 1", "question de suivi courte 2", "question de suivi courte 3"]}`;
+  const systemPrompt = `Tu es un oracle mystique qui parle à ${nom} (${pays}). Réponds impérativement dans la langue de code ISO "${langueCible}", ton mystérieux mais chaleureux et INSTRUCTIF : glisse un vrai conseil concret dans la métaphore. Varie ton vocabulaire à chaque fois. Ne réutilise JAMAIS ces phrases déjà dites : ${dernieresReponsesOracle || "aucune"}. Historique récent :\n${contexteHistorique || "aucun"}\nRéponds UNIQUEMENT avec ce JSON exact, sans texte autour, sans balises markdown : {"reponse": "3 à 5 phrases riches et concrètes", "suggestions": ["question de suivi courte 1", "question de suivi courte 2", "question de suivi courte 3"]}`;
   const brut = await appelerGroq(systemPrompt, message);
   let reponse, suggestions = [];
   try {
