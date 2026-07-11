@@ -987,6 +987,24 @@ app.post('/api/supreme/feedback', (req, res) => {
   res.json({ success: true });
 });
 
+app.get('/politique-confidentialite', (req, res) => {
+  res.send(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Politique de confidentialité — Le Devin</title>
+  <style>body{background:#0a0806;color:#e8dcc8;font-family:Georgia,serif;max-width:680px;margin:0 auto;padding:40px 24px;line-height:1.8}h1{color:#d4af37;font-weight:400;letter-spacing:2px}h2{color:#d4af37;font-weight:400;font-size:16px;margin-top:32px}a{color:#d4af37}</style>
+  </head><body>
+  <h1>Politique de confidentialité</h1>
+  <p>Le Devin ("l'Application") respecte votre vie privée. Voici les informations collectées et leur usage.</p>
+  <h2>Données collectées</h2>
+  <p>Nom, âge, date de naissance, pays, statut et profession, renseignés volontairement pour personnaliser vos consultations. Ces données sont stockées sur nos serveurs et ne sont jamais vendues à des tiers.</p>
+  <h2>Publicités</h2>
+  <p>L'Application utilise Google AdMob pour afficher des publicités optionnelles. AdMob peut collecter un identifiant publicitaire conformément à sa propre politique de confidentialité.</p>
+  <h2>Usage</h2>
+  <p>Vos données servent uniquement à personnaliser votre expérience de divination au sein de l'Application. Aucune donnée n'est partagée à des fins commerciales externes.</p>
+  <h2>Contact</h2>
+  <p>Pour toute question : [ton email de contact]</p>
+  <p style="margin-top:40px;opacity:0.5;font-style:italic">Cette application est proposée à titre de divertissement uniquement.</p>
+  </body></html>`);
+});
+
 simulationApprentissage();
 
 app.listen(PORT, () => console.log(`🔮 Oracle apprenant sur le port ${PORT}`));
