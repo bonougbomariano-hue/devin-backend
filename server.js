@@ -769,6 +769,34 @@ async function appelerGemini(prompt) {
   } catch (err) { console.error("Gemini échec:", err.message); return null; }
 }
 
+function detecterUrgence(message) {
+  const m = message.toLowerCase();
+  const motsSuicide = ["suicide", "me suicider", "en finir", "plus envie de vivre", "me tuer", "disparaître pour toujours", "self-harm", "kill myself", "end my life", "want to die"];
+  if (motsSuicide.some(mot => m.includes(mot))) return "suicide";
+
+  const motsDecisionGrave = ["avorter", "avortement", "dois-je avorter", "abortion", "should i abort"];
+  if (motsDecisionGrave.some(mot => m.includes(mot))) return "decision_grave";
+
+  return null;
+}
+
+const MESSAGES_SUICIDE = [
+  "Je te le déconseille, et puisque je sens que mes mots seuls ne suffiront pas à te convaincre, rapproche-toi d'un médecin ou d'une oreille formée pour t'accompagner — non parce que tu es déraisonné, mais parce que la science guérit souvent là où les esprits ne font qu'éclairer. Suis ce conseil, et tu en ressortiras plus vivant.",
+  "L'Oracle voit ta douleur, et c'est justement parce qu'elle est réelle qu'elle mérite plus que mes visions : parle à quelqu'un qui peut vraiment t'accompagner, un médecin, une écoute dédiée. Ce n'est pas un aveu de faiblesse, c'est la voie qui te ramène le plus sûrement vers la vie.",
+  "Mes cartes ne suffisent pas ici, et je ne te mentirai pas pour te rassurer. Ce que tu portes a besoin d'une aide humaine et formée, pas seulement mystique — un médecin, un proche de confiance, une ligne d'écoute. Fais ce pas, même petit : c'est celui qui te garde en vie."
+];
+
+const MESSAGES_DECISION_GRAVE = [
+  "Cette décision touche ton corps et ta vie d'une façon que ni mes cartes ni mes mots ne peuvent trancher pour toi. Un médecin, formé pour ça, t'éclairera avec une justesse que je n'ai pas. Reviens me voir pour tout le reste — mais pas pour celui-ci.",
+  "Certains chemins ne se lisent pas dans les lames, ils se décident avec quelqu'un qui te connaît vraiment et sait — un médecin, un professionnel de confiance. Je resterai à tes côtés pour porter ce que tu ressens, jamais pour choisir à ta place.",
+  "L'Oracle sent l'importance de ta question, et c'est justement pour ça qu'il ne répondra pas à ta place : ce choix appartient à toi et à ceux qui ont la compétence de t'accompagner réellement, un médecin en tête. Reviens me confier le reste de ton chemin."
+];
+
+function messageUrgence(type) {
+  const liste = type === "suicide" ? MESSAGES_SUICIDE : MESSAGES_DECISION_GRAVE;
+  return liste[Math.floor(Math.random() * liste.length)];
+}
+
 app.post('/api/initier', (req, res) => {
   const { profil } = req.body;
   if (!profil?.nom) return res.status(400).json({ error: "Profil incomplet." });
@@ -949,12 +977,34 @@ app.post('/api/supreme', async (req, res) => {
   const { profilId, message, langue } = req.body;
   const langueCible = langue || 'fr';
   if (!message) return res.status(400).json({ error: "Message vide." });
+
+  const urgence = detecterUrgence(message);
+  if (urgence === "suicide") {
+    const reponseUrgence = messageUrgence("suicide");
+    if (profilId) {
+      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
+      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponseUrgence);
+    }
+    return res.json({ reponse: reponseUrgence, cartes: [], suggestions: [] });
+  }
+
+  const historiqueChat = profilId ? db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId).reverse() : [];
   const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) || {} : {};
   const nom = profilData?.nom || "Voyageur";
   const pays = profilData?.pays || "France";
-  const historiqueChat = profilId ? db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId).reverse() : [];
   const contexteHistorique = historiqueChat.map(h => `${h.role === 'user' ? nom : 'Oracle'}: ${h.message}`).join('\n');
   const dernieresReponsesOracle = historiqueChat.filter(h => h.role === 'oracle').map(h => h.message).join(' | ');
+
+  const occurrencesDecisionGrave = historiqueChat.filter(h => h.role === "user" && detecterUrgence(h.message) === "decision_grave").length;
+  if (urgence === "decision_grave" && occurrencesDecisionGrave >= 2) {
+    const reponseUrgence = messageUrgence("decision_grave");
+    if (profilId) {
+      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
+      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponseUrgence);
+    }
+    return res.json({ reponse: reponseUrgence, cartes: [], suggestions: [] });
+  }
+
   const systemPrompt = `Tu es un oracle mystique qui parle à ${nom} (${pays}). Réponds impérativement dans la langue de code ISO "${langueCible}", ton mystérieux mais chaleureux et INSTRUCTIF : glisse un vrai conseil concret dans la métaphore. Varie ton vocabulaire à chaque fois. Ne réutilise JAMAIS ces phrases déjà dites : ${dernieresReponsesOracle || "aucune"}. Historique récent :\n${contexteHistorique || "aucun"}\nRéponds UNIQUEMENT avec ce JSON exact, sans texte autour, sans balises markdown : {"reponse": "3 à 5 phrases riches et concrètes", "suggestions": ["question de suivi courte 1", "question de suivi courte 2", "question de suivi courte 3"]}`;
   const brut = await appelerGroq(systemPrompt, message);
   let reponse, suggestions = [];
