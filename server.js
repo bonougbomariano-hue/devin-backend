@@ -1,30 +1,61 @@
 import express from 'express';
 import cors from 'cors';
-import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import dotenv from 'dotenv';
+import { db, databaseInfo } from './database.js';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 const app = express();
 
+const ORIGINES_AUTORISEES = (process.env.ALLOWED_ORIGINS || "http://localhost,https://localhost,capacitor://localhost")
+  .split(",")
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: '*',
+  origin(origin, callback) {
+    if (!origin || ORIGINES_AUTORISEES.includes(origin) || process.env.NODE_ENV !== "production") {
+      return callback(null, true);
+    }
+    return callback(new Error("Origine non autorisée."));
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+app.use(express.json({ limit: "64kb" }));
 
 const PORT = process.env.PORT || 5000;
+const requetesRecentes = new Map();
 
-const db = new Database(join(__dirname, 'oracle.db'));
-db.pragma('journal_mode = WAL');
-db.exec(`
+app.use("/api", (req, res, next) => {
+  const maintenant = Date.now();
+  const cle = req.ip || "inconnue";
+  const recentes = (requetesRecentes.get(cle) || []).filter(t => maintenant - t < 60000);
+  if (recentes.length >= 90) return res.status(429).json({ error: "Trop de requêtes. Patientez un instant." });
+  recentes.push(maintenant);
+  requetesRecentes.set(cle, recentes);
+  next();
+});
+
+setInterval(() => {
+  const limite = Date.now() - 60000;
+  for (const [cle, valeurs] of requetesRecentes) {
+    const recentes = valeurs.filter(t => t >= limite);
+    if (recentes.length) requetesRecentes.set(cle, recentes);
+    else requetesRecentes.delete(cle);
+  }
+}, 60000).unref();
+
+await db.pragma('journal_mode = WAL');
+await db.exec(`
   CREATE TABLE IF NOT EXISTS profils (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nom TEXT, age INTEGER, pays TEXT, statut TEXT, profession TEXT,
@@ -388,34 +419,34 @@ function analyserImplicite(message) {
   return [...new Set(domainesDetectes)];
 }
 
-function apprendreFragment(type, texte, source) {
-  const existant = db.prepare('SELECT id FROM fragments_appris WHERE type = ? AND texte = ?').get(type, texte);
+async function apprendreFragment(type, texte, source) {
+  const existant = await db.prepare('SELECT id FROM fragments_appris WHERE type = ? AND texte = ?').get(type, texte);
   if (existant) {
-    db.prepare('UPDATE fragments_appris SET occurrence = occurrence + 1 WHERE id = ?').run(existant.id);
+    await db.prepare('UPDATE fragments_appris SET occurrence = occurrence + 1 WHERE id = ?').run(existant.id);
   } else {
-    db.prepare('INSERT INTO fragments_appris (type, texte, source, occurrence) VALUES (?, ?, ?, 1)').run(type, texte, source);
+    await db.prepare('INSERT INTO fragments_appris (type, texte, source, occurrence) VALUES (?, ?, ?, 1)').run(type, texte, source);
   }
 }
 
-function getFragments(type) {
+async function getFragments(type) {
   const base = FRAGMENTS[type] || [];
-  const appris = db.prepare('SELECT texte FROM fragments_appris WHERE type = ? ORDER BY occurrence DESC LIMIT 30').all(type);
+  const appris = await db.prepare('SELECT texte FROM fragments_appris WHERE type = ? ORDER BY occurrence DESC LIMIT 30').all(type);
   const tous = [...base, ...appris.map(a => a.texte)];
   return [...new Set(tous)];
 }
 
-function sauvegarderMemoire(profilId, cle, valeur) {
-  db.prepare('INSERT OR REPLACE INTO memoire_utilisateur (profil_id, cle, valeur, date_maj) VALUES (?, ?, ?, datetime("now"))').run(profilId, cle, valeur);
+async function sauvegarderMemoire(profilId, cle, valeur) {
+  await db.prepare("INSERT OR REPLACE INTO memoire_utilisateur (profil_id, cle, valeur, date_maj) VALUES (?, ?, ?, datetime('now'))").run(profilId, cle, valeur);
 }
 
-function getMemoire(profilId, cle) {
-  const r = db.prepare('SELECT valeur FROM memoire_utilisateur WHERE profil_id = ? AND cle = ?').get(profilId, cle);
+async function getMemoire(profilId, cle) {
+  const r = await db.prepare('SELECT valeur FROM memoire_utilisateur WHERE profil_id = ? AND cle = ?').get(profilId, cle);
   return r ? r.valeur : null;
 }
 
-function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores) {
+async function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, tonPrefere, frequenceConseils, frequenceMetaphores) {
     try {
-        db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, date_maj) 
+        await db.prepare(`INSERT INTO personnalisation (profil_id, longueur_preferee, style_prefere, ton_prefere, frequence_conseils, frequence_metaphores, date_maj) 
             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(profil_id) DO UPDATE SET
                 longueur_preferee = excluded.longueur_preferee,
@@ -429,29 +460,29 @@ function apprendrePersonnalisation(profilId, longueurPreferee, stylePrefere, ton
     }
 }
 
-function getPersonnalisation(profilId) {
+async function getPersonnalisation(profilId) {
   return db.prepare(`SELECT * FROM personnalisation WHERE profil_id = ?`).get(profilId);
 }
 
-function analyserEtApprendre(message, profilId) {
+async function analyserEtApprendre(message, profilId) {
   const mots = message.toLowerCase().split(/\s+/);
   const motsCles = mots.filter(m => m.length > 4);
 
-  motsCles.forEach(mot => {
-    apprendreFragment('sujets', `Votre préoccupation concernant "${mot}"`, 'utilisateur');
-  });
+  await Promise.all(motsCles.map(mot =>
+    apprendreFragment('sujets', `Votre préoccupation concernant "${mot}"`, 'utilisateur')
+  ));
 
   if (message.length > 30) {
     const extrait = message.slice(0, 80);
-    apprendreFragment('complements', `ce que vous avez partagé : "${extrait}..."`, 'utilisateur');
+    await apprendreFragment('complements', `ce que vous avez partagé : "${extrait}..."`, 'utilisateur');
   }
 
   const emotion = analyserEmotion(message);
   if (emotion !== 'neutre') {
-    sauvegarderMemoire(profilId, 'derniere_emotion', emotion);
+    await sauvegarderMemoire(profilId, 'derniere_emotion', emotion);
   }
-  sauvegarderMemoire(profilId, 'dernier_message', message.slice(0, 200));
-  sauvegarderMemoire(profilId, 'derniere_conversation', new Date().toISOString());
+  await sauvegarderMemoire(profilId, 'dernier_message', message.slice(0, 200));
+  await sauvegarderMemoire(profilId, 'derniere_conversation', new Date().toISOString());
 }
 
 function choisirUnique(tableau, dejaUtilises) {
@@ -460,23 +491,23 @@ function choisirUnique(tableau, dejaUtilises) {
   return disponibles[Math.floor(Math.random() * disponibles.length)];
 }
 
-function genererReponseSupreme(profilId, message, profilData) {
+async function genererReponseSupreme(profilId, message, profilData) {
   const pays = profilData?.pays || "France";
-  const perso = getPersonnalisation(profilId);
+  const perso = await getPersonnalisation(profilId);
   const nom = profilData?.nom || "Voyageur";
 
-  analyserEtApprendre(message, profilId);
+  await analyserEtApprendre(message, profilId);
 
   const emotion = analyserEmotion(message);
   const domainesImplicites = analyserImplicite(message);
 
-  const historique = db.prepare(
+  const historique = await db.prepare(
     'SELECT message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 15'
   ).all(profilId);
   const dernieresReponses = historique.map(h => h.message);
 
-  const derniereEmotion = getMemoire(profilId, 'derniere_emotion');
-  const preferences = db.prepare(
+  const derniereEmotion = await getMemoire(profilId, 'derniere_emotion');
+  const preferences = await db.prepare(
     "SELECT feedback FROM conversations_supremes WHERE profil_id = ? AND feedback IS NOT NULL ORDER BY date DESC LIMIT 20"
   ).all(profilId);
 
@@ -524,18 +555,18 @@ function genererReponseSupreme(profilId, message, profilData) {
     const suffixe = emotionData.suffixes[Math.floor(Math.random() * emotionData.suffixes.length)];
     reponse += `${prefixe} ${nom}. ${suffixe} `;
   } else {
-    const sujet1 = choisirUnique(getFragments('sujets'), dejaUtilises);
+    const sujet1 = choisirUnique(await getFragments('sujets'), dejaUtilises);
     dejaUtilises.push(sujet1);
-    const verbe1 = choisirUnique(getFragments('verbes'), dejaUtilises);
+    const verbe1 = choisirUnique(await getFragments('verbes'), dejaUtilises);
     dejaUtilises.push(verbe1);
-    const complement1 = choisirUnique(getFragments('complements'), dejaUtilises);
+    const complement1 = choisirUnique(await getFragments('complements'), dejaUtilises);
     dejaUtilises.push(complement1);
     reponse += `${tonChoisi.ouverture} ${sujet1} ${verbe1} ${complement1}. `;
   }
 
-  const connecteur = choisirUnique(getFragments('connecteurs'), dejaUtilises);
+  const connecteur = choisirUnique(await getFragments('connecteurs'), dejaUtilises);
   dejaUtilises.push(connecteur);
-  const sujet2 = choisirUnique(getFragments('sujets'), dejaUtilises);
+  const sujet2 = choisirUnique(await getFragments('sujets'), dejaUtilises);
   dejaUtilises.push(sujet2);
 
   reponse += `${connecteur} ${sujet2} ont un message pour vous, ${nom}. `;
@@ -561,7 +592,7 @@ function genererReponseSupreme(profilId, message, profilData) {
   reponse += `${tonChoisi.fermeture}`;
 
   if (dernieresReponses.includes(reponse)) {
-    const nouveauComplement = choisirUnique(getFragments('complements'), dejaUtilises);
+    const nouveauComplement = choisirUnique(await getFragments('complements'), dejaUtilises);
     reponse = reponse.replace(/\./g, () => Math.random() > 0.5 ? `, ${nouveauComplement}.` : '.');
   }
 
@@ -582,11 +613,9 @@ function genererReponseSupreme(profilId, message, profilData) {
   }
 
   const phrases = reponse.split(/[.!?]/);
-  phrases.forEach(p => {
-    if (p.trim().length > 15) {
-      apprendreFragment('complements', p.trim(), 'oracle');
-    }
-  });
+  await Promise.all(phrases
+    .filter(p => p.trim().length > 15)
+    .map(p => apprendreFragment('complements', p.trim(), 'oracle')));
 
   return reponse;
 }
@@ -613,41 +642,42 @@ function tirerCartes(n = 3) {
   return tirees;
 }
 
-function peutConsulterDomaine(profilId, domaine) {
+async function peutConsulterDomaine(profilId, domaine) {
   if (!profilId) return true;
-  const domainesConsultes = JSON.parse((db.prepare(`SELECT domaines_consultes FROM profils WHERE id = ?`).get(profilId))?.domaines_consultes || '[]');
+  const profil = await db.prepare(`SELECT domaines_consultes FROM profils WHERE id = ?`).get(profilId);
+  const domainesConsultes = JSON.parse(profil?.domaines_consultes || '[]');
   const today = new Date().toDateString();
   return !domainesConsultes.find(d => d.domaine === domaine && new Date(d.date).toDateString() === today);
 }
 
-function getNiveauProgression(profilId, domaine) {
+async function getNiveauProgression(profilId, domaine) {
   if (!profilId) return 1;
-  const p = db.prepare(`SELECT niveau FROM progression_utilisateur WHERE profil_id = ? AND domaine = ?`).get(profilId, domaine);
+  const p = await db.prepare(`SELECT niveau FROM progression_utilisateur WHERE profil_id = ? AND domaine = ?`).get(profilId, domaine);
   return p?.niveau || 1;
 }
 
-function incrementerProgression(profilId, domaine) {
-  const actuel = db.prepare(`SELECT * FROM progression_utilisateur WHERE profil_id = ? AND domaine = ?`).get(profilId, domaine);
+async function incrementerProgression(profilId, domaine) {
+  const actuel = await db.prepare(`SELECT * FROM progression_utilisateur WHERE profil_id = ? AND domaine = ?`).get(profilId, domaine);
   if (actuel) {
     const nv = actuel.niveau + 1;
-    db.prepare(`UPDATE progression_utilisateur SET niveau = ?, date_mise_a_jour = datetime('now') WHERE profil_id = ? AND domaine = ?`).run(nv, profilId, domaine);
+    await db.prepare(`UPDATE progression_utilisateur SET niveau = ?, date_mise_a_jour = datetime('now') WHERE profil_id = ? AND domaine = ?`).run(nv, profilId, domaine);
     return nv;
   } else {
-    db.prepare(`INSERT INTO progression_utilisateur (profil_id, domaine, niveau) VALUES (?, ?, 1)`).run(profilId, domaine);
+    await db.prepare(`INSERT INTO progression_utilisateur (profil_id, domaine, niveau) VALUES (?, ?, 1)`).run(profilId, domaine);
     return 1;
   }
 }
 
-function apprendre(pays, domaine, cle, valeur) {
-  try { db.prepare(`INSERT INTO apprentissage (pays, domaine, cle, motif) VALUES (?,?,?,?) ON CONFLICT(pays, domaine, cle, motif) DO UPDATE SET occurrence=occurrence+1`).run(pays, domaine, cle, valeur); } catch {}
+async function apprendre(pays, domaine, cle, valeur) {
+  try { await db.prepare(`INSERT INTO apprentissage (pays, domaine, cle, motif) VALUES (?,?,?,?) ON CONFLICT(pays, domaine, cle, motif) DO UPDATE SET occurrence=occurrence+1`).run(pays, domaine, cle, valeur); } catch {}
 }
 
-function apprendrePattern(pays, statut, profession, domaine, cle, valeur) {
-  try { db.prepare(`INSERT INTO patterns_utilisateurs (pays, statut, profession, domaine, cle, valeur) VALUES (?,?,?,?,?,?) ON CONFLICT(pays, statut, profession, domaine, cle, valeur) DO UPDATE SET poids=poids+1`).run(pays, statut, profession, domaine, cle, valeur); } catch {}
+async function apprendrePattern(pays, statut, profession, domaine, cle, valeur) {
+  try { await db.prepare(`INSERT INTO patterns_utilisateurs (pays, statut, profession, domaine, cle, valeur) VALUES (?,?,?,?,?,?) ON CONFLICT(pays, statut, profession, domaine, cle, valeur) DO UPDATE SET poids=poids+1`).run(pays, statut, profession, domaine, cle, valeur); } catch {}
 }
 
-function getGroupInsight(profilId) {
-  const profil = db.prepare(`SELECT statut FROM profils WHERE id = ?`).get(profilId);
+async function getGroupInsight(profilId) {
+  const profil = await db.prepare(`SELECT statut FROM profils WHERE id = ?`).get(profilId);
   if (!profil) return null;
   const statut = profil.statut;
   const groupeMap = {
@@ -662,7 +692,7 @@ function getGroupInsight(profilId) {
 }
 
 async function genererQuestionsAdaptatives(domaine, profilId, profilData, langueCible = 'fr') {
-  const niveau = getNiveauProgression(profilId, domaine);
+  const niveau = await getNiveauProgression(profilId, domaine);
   const questionsGeneriqueSecours = [
     { cle: "ressenti_secours_1", question: "Que ressentez-vous face à cette situation ?", options: ["De l'inquiétude","De la confusion","De l'espoir","Une envie d'agir","Un besoin de repos"] },
     { cle: "attente_secours_1", question: "Qu'attendez-vous vraiment de l'Oracle ici ?", options: ["Une clarté immédiate","Un signe à suivre","Une confirmation","Un conseil concret","Un simple réconfort"] }
@@ -675,7 +705,7 @@ async function genererQuestionsAdaptatives(domaine, profilId, profilData, langue
 
   const nom = profilData?.nom || "Voyageur";
   const pays = profilData?.pays || "France";
-  const historiqueBrut = db.prepare(
+  const historiqueBrut = await db.prepare(
     `SELECT question FROM consultations WHERE profil_id = ? AND domaine = ? ORDER BY date DESC LIMIT 3`
   ).all(profilId, domaine);
   const historiqueTexte = historiqueBrut.map(h => {
@@ -687,7 +717,7 @@ async function genererQuestionsAdaptatives(domaine, profilId, profilData, langue
 Réponses données lors des visites précédentes dans ce domaine : ${historiqueTexte || "aucune, première visite"}.
 Génère 4 NOUVELLES questions qui font progresser naturellement la relation à partir de ces réponses passées (comme une conversation qui avance dans le temps, jamais une répétition). Chaque question a 5 options de réponse variées et détaillées. Réponds impérativement dans la langue de code ISO "${langueCible}". UNIQUEMENT avec ce JSON exact, rien d'autre : {"questions": [{"cle": "identifiant_court_unique", "question": "texte", "options": ["option1","option2","option3","option4","option5"]}]}`;
 
-  const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour, sans balises markdown.", promptQuestions);
+  const { texte: brut } = await appelerIA("Tu réponds uniquement en JSON valide, sans texte autour, sans balises markdown.", promptQuestions);
   let questionsFinales = null;
   try {
     const parsed = JSON.parse(brut.replace(/```json|```/g, "").trim());
@@ -702,9 +732,10 @@ Génère 4 NOUVELLES questions qui font progresser naturellement la relation à 
   return { questions: selectionnees, niveau };
 }
 
-function genererMessagesEnrichis(domaine, pays, profilId, seed) {
+async function genererMessagesEnrichis(domaine, pays, profilId, seed) {
   const messagesBase = MESSAGES_BASE[domaine] || MESSAGES_BASE["chemin de vie"];
-  const dejaServis = db.prepare(`SELECT messages_servis FROM consultations WHERE profil_id=? AND domaine=? ORDER BY date DESC LIMIT 5`).all(profilId, domaine).map(c => { try { return JSON.parse(c.messages_servis || '[]'); } catch { return []; } }).flat();
+  const consultations = await db.prepare(`SELECT messages_servis FROM consultations WHERE profil_id=? AND domaine=? ORDER BY date DESC LIMIT 5`).all(profilId, domaine);
+  const dejaServis = consultations.map(c => { try { return JSON.parse(c.messages_servis || '[]'); } catch { return []; } }).flat();
   const disponibles = messagesBase.filter(m => !dejaServis.includes(m.cle));
   const messagesChoisis = disponibles.length >= 1 ? disponibles : [...messagesBase];
   const messagePrincipal = { ...messagesChoisis[seed % messagesChoisis.length] };
@@ -720,15 +751,15 @@ function genererMessagesEnrichis(domaine, pays, profilId, seed) {
 
 function simulationApprentissage() {
   const domaines = Object.keys(MESSAGES_BASE);
-  setInterval(() => {
+  setInterval(async () => {
     const paysAleatoire = PAYS[Math.floor(Math.random() * PAYS.length)];
     const domaineAleatoire = domaines[Math.floor(Math.random() * domaines.length)];
     const questions = QUESTIONS_NIVEAU[domaineAleatoire]?.[1] || [];
     if (questions.length > 0) {
       const qAleatoire = questions[Math.floor(Math.random() * questions.length)];
       const reponseAleatoire = qAleatoire.options[Math.floor(Math.random() * qAleatoire.options.length)];
-      apprendrePattern(paysAleatoire, "En apprentissage", "Simulation", domaineAleatoire, qAleatoire.cle, reponseAleatoire);
-      apprendre(paysAleatoire, domaineAleatoire, qAleatoire.cle, reponseAleatoire);
+      await apprendrePattern(paysAleatoire, "En apprentissage", "Simulation", domaineAleatoire, qAleatoire.cle, reponseAleatoire);
+      await apprendre(paysAleatoire, domaineAleatoire, qAleatoire.cle, reponseAleatoire);
     }
   }, 300000);
 }
@@ -741,8 +772,9 @@ async function appelerGroq(systemPrompt, userMessage) {
       method: "POST", signal: controller.signal,
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
+        model: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
         max_tokens: 400,
+        response_format: { type: "json_object" },
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }]
       })
     });
@@ -754,9 +786,13 @@ async function appelerGroq(systemPrompt, userMessage) {
 }
 
 async function appelerGemini(prompt) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+    const modele = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modele}:generateContent?key=${process.env.GEMINI_API_KEY}`, {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
@@ -765,8 +801,30 @@ async function appelerGemini(prompt) {
     });
     if (!r.ok) throw new Error(`Gemini ${r.status}`);
     const data = await r.json();
-    return JSON.parse(data.candidates[0].content.parts[0].text);
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
   } catch (err) { console.error("Gemini échec:", err.message); return null; }
+  finally { clearTimeout(timeout); }
+}
+
+function anonymiserPourGemini(texte) {
+  return texte
+    .replace(/Personne\s*:\s*[^,\n]+,/gi, "Personne : utilisateur anonyme,")
+    .replace(/pour\s+[A-ZÀ-ÖØ-Ý][\p{L}'’-]+,\s*(\d+\s*ans)/giu, "pour une personne de $1")
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[email masqué]")
+    .replace(/(?:\+?\d[\s.-]?){8,}/g, "[numéro masqué]");
+}
+
+async function appelerIA(systemPrompt, userMessage) {
+  if (process.env.GROQ_API_KEY) {
+    const groq = await appelerGroq(systemPrompt, userMessage);
+    if (groq) return { texte: groq, fournisseur: "groq" };
+  }
+  if (process.env.GEMINI_API_KEY) {
+    const promptAnonyme = anonymiserPourGemini(`${systemPrompt}\n\n${userMessage}`);
+    const gemini = await appelerGemini(promptAnonyme);
+    if (gemini) return { texte: gemini, fournisseur: "gemini" };
+  }
+  return { texte: null, fournisseur: "local" };
 }
 
 function detecterUrgence(message) {
@@ -797,16 +855,26 @@ function messageUrgence(type) {
   return liste[Math.floor(Math.random() * liste.length)];
 }
 
-app.post('/api/initier', (req, res) => {
+app.get('/api/health', (req, res) => {
+  db.prepare("SELECT 1").get()
+    .then(() => res.json({ ok: true, service: "le-devin", database: databaseInfo.provider, heure: new Date().toISOString() }))
+    .catch(() => res.status(503).json({ ok: false, error: "Base de données indisponible." }));
+});
+
+app.post('/api/initier', async (req, res) => {
   const { profil } = req.body;
-  if (!profil?.nom) return res.status(400).json({ error: "Profil incomplet." });
-  const existant = db.prepare(`SELECT id, domaines_consultes FROM profils WHERE nom = ? AND pays = ?`).get(profil.nom, profil.pays);
+  if (!profil?.nom || !profil?.pays) return res.status(400).json({ error: "Profil incomplet." });
+  profil.nom = String(profil.nom).trim().slice(0, 80);
+  profil.pays = String(profil.pays).trim().slice(0, 80);
+  if (!profil.nom || !profil.pays) return res.status(400).json({ error: "Profil incomplet." });
+  const existant = await db.prepare(`SELECT id, domaines_consultes FROM profils WHERE nom = ? AND pays = ?`).get(profil.nom, profil.pays);
   let id;
   if (existant) {
-    db.prepare(`UPDATE profils SET age=?, statut=?, profession=?, offrande=?, lune=?, element=?, date_naissance=? WHERE id=?`).run(profil.age, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, profil.dateNaissance || null, existant.id);
+    await db.prepare(`UPDATE profils SET age=?, statut=?, profession=?, offrande=?, lune=?, element=?, date_naissance=? WHERE id=?`).run(profil.age, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, profil.dateNaissance || null, existant.id);
     id = existant.id;
   } else {
-    id = db.prepare(`INSERT INTO profils (nom,age,pays,statut,profession,offrande,lune,element,date_naissance) VALUES (?,?,?,?,?,?,?,?,?)`).run(profil.nom, profil.age, profil.pays, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, profil.dateNaissance || null).lastInsertRowid;
+    const insertion = await db.prepare(`INSERT INTO profils (nom,age,pays,statut,profession,offrande,lune,element,date_naissance) VALUES (?,?,?,?,?,?,?,?,?)`).run(profil.nom, profil.age, profil.pays, profil.statut, profil.profession, profil.offrande, profil.lune, profil.element, profil.dateNaissance || null);
+    id = Number(insertion.lastInsertRowid);
   }
   const domainesConsultes = JSON.parse(existant?.domaines_consultes || '[]');
   const aujourdhui = new Date().toDateString();
@@ -819,22 +887,25 @@ app.get('/api/pays', (req, res) => res.json(PAYS.map(p => ({ nom: p, desc: "" })
 app.post('/api/sondage', async (req, res) => {
   const { domaine, profilId, langue } = req.body;
   if (!domaine) return res.status(400).json({ error: "Domaine requis." });
-  if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
-  const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) : {};
+  if (profilId && !(await peutConsulterDomaine(profilId, domaine))) return res.status(429).json({ error: "Déjà consulté." });
+  const profilData = profilId ? await db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) : {};
   const { questions, niveau } = await genererQuestionsAdaptatives(domaine, profilId, profilData, langue || 'fr');
   res.json({ questions, domaine, niveau });
 });
 
-app.post('/api/enregistrer_sondage', (req, res) => {
+app.post('/api/enregistrer_sondage', async (req, res) => {
   const { domaine, profilId, reponses } = req.body;
+  if (!domaine || !reponses || typeof reponses !== "object" || Array.isArray(reponses)) {
+    return res.status(400).json({ error: "Sondage incomplet." });
+  }
   if (profilId) {
-    const profil = db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
+    const profil = await db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
     if (profil) {
-      Object.entries(reponses).forEach(([cle, valeur]) => {
-        apprendre(profil.pays, domaine, cle, valeur);
-        apprendrePattern(profil.pays, profil.statut, profil.profession, domaine, cle, valeur);
-      });
-      incrementerProgression(profilId, domaine);
+      await Promise.all(Object.entries(reponses).flatMap(([cle, valeur]) => [
+        apprendre(profil.pays, domaine, cle, valeur),
+        apprendrePattern(profil.pays, profil.statut, profil.profession, domaine, cle, valeur)
+      ]));
+      await incrementerProgression(profilId, domaine);
     }
   }
   res.json({ success: true });
@@ -845,10 +916,10 @@ app.post('/api/oracle', async (req, res) => {
   const langueCible = langue || 'fr';
   if (!profilId) return res.status(400).json({ error: "Profil ID requis." });
   if (!domaine) return res.status(400).json({ error: "Domaine requis." });
-  if (profilId && !peutConsulterDomaine(profilId, domaine)) return res.status(429).json({ error: "Déjà consulté." });
+  if (profilId && !(await peutConsulterDomaine(profilId, domaine))) return res.status(429).json({ error: "Déjà consulté." });
   
   try {
-    const profil = db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
+    const profil = await db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
     if (!profil) return res.status(404).json({ error: "Profil non trouvé." });
 
     const nom = profil.nom || "Voyageur";
@@ -866,13 +937,13 @@ app.post('/api/oracle', async (req, res) => {
 
     const contexteReponses = Object.entries(reponses || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
     const promptOracle = `Tu es un oracle mystique. Réponds impérativement dans la langue de code ISO "${langueCible}". Génère une prédiction pour ${nom}, ${age} ans, ${pays}, domaine "${domaine}". Horoscope du jour : ${aztro.description}. Contexte donné par la personne : ${contexteReponses || "aucun"}. Exploite concrètement ce contexte, varie le vocabulaire à chaque fois, glisse un vrai conseil actionnable dans la métaphore. UNIQUEMENT avec ce JSON exact, rien d'autre : {"principal": "message principal de 3-4 phrases mystiques et concrètes", "complementaires": [{"domaine": "Nom Domaine", "icone": "emoji", "titre": "titre court", "message": "2 phrases"}]}`;
-    const brutOracle = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour.", promptOracle);
+    const { texte: brutOracle } = await appelerIA("Tu réponds uniquement en JSON valide, sans texte autour.", promptOracle);
     let messagesEnrichis;
     try {
       const parsed = JSON.parse((brutOracle || "").replace(/```json|```/g, "").trim());
       messagesEnrichis = parsed.principal ? { principal: parsed.principal, complementaires: parsed.complementaires || [], messagesServis: [] } : null;
     } catch { messagesEnrichis = null; }
-    if (!messagesEnrichis) messagesEnrichis = genererMessagesEnrichis(domaine, pays, profilId, seed);
+    if (!messagesEnrichis) messagesEnrichis = await genererMessagesEnrichis(domaine, pays, profilId, seed);
     
     const previsions = [
       { domaine: domaine.charAt(0).toUpperCase() + domaine.slice(1), icone: "✨", titre: "Votre Révélation", horizon: "Maintenant", message: messagesEnrichis.principal, principal: true },
@@ -882,8 +953,8 @@ app.post('/api/oracle', async (req, res) => {
     if (profilId) {
       const dCons = JSON.parse(profil.domaines_consultes || '[]');
       dCons.push({ domaine, date: new Date().toISOString() });
-      db.prepare(`UPDATE profils SET domaines_consultes = ?, derniere_consultation = datetime('now') WHERE id = ?`).run(JSON.stringify(dCons), profilId);
-      db.prepare(`INSERT INTO consultations (profil_id, domaine, question, cartes, humeur, horoscope, citation, previsions, messages_servis) VALUES (?,?,?,?,?,?,?,?,?)`).run(profilId, domaine, JSON.stringify(reponses), JSON.stringify(cartes), aztro.mood, aztro.description, JSON.stringify(citation), JSON.stringify(previsions), JSON.stringify(messagesEnrichis.messagesServis));
+      await db.prepare(`UPDATE profils SET domaines_consultes = ?, derniere_consultation = datetime('now') WHERE id = ?`).run(JSON.stringify(dCons), profilId);
+      await db.prepare(`INSERT INTO consultations (profil_id, domaine, question, cartes, humeur, horoscope, citation, previsions, messages_servis) VALUES (?,?,?,?,?,?,?,?,?)`).run(profilId, domaine, JSON.stringify(reponses), JSON.stringify(cartes), aztro.mood, aztro.description, JSON.stringify(citation), JSON.stringify(previsions), JSON.stringify(messagesEnrichis.messagesServis));
     }
     res.json({ nom, signe, humeur: aztro.mood, horoscope: aztro.description, cartes, citation, previsions, domaine });
   } catch (err) { console.error(err); res.status(500).json({ error: "Le voile s'épaissit." }); }
@@ -901,9 +972,9 @@ app.post('/api/sixieme-sens/revelation', async (req, res) => {
   }
 
   const aujourdHui = new Date().toISOString().slice(0, 10);
-  const tiragesAujourdhui = db.prepare(
+  const tiragesAujourdhui = (await db.prepare(
     `SELECT COUNT(*) as n FROM tirages_sixieme_sens WHERE profil_id = ? AND date(date) = ?`
-  ).get(profilId, aujourdHui).n;
+  ).get(profilId, aujourdHui)).n;
 
   if (tiragesAujourdhui >= 3) {
     return res.json({
@@ -912,7 +983,7 @@ app.post('/api/sixieme-sens/revelation', async (req, res) => {
     });
   }
 
-  const profil = db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
+  const profil = await db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId);
   if (!profil) return res.status(404).json({ error: "Profil non trouvé." });
 
   const nom = profil.nom || "Voyageur";
@@ -922,7 +993,7 @@ app.post('/api/sixieme-sens/revelation', async (req, res) => {
   const signe = obtenirSigne(age, dateNaissance);
 
   const cleCache = `${profilId}_${aujourdHui}_${cartesChoisies.join('-')}`;
-  const dejaCalcule = db.prepare(`SELECT revelation FROM tirages_sixieme_sens WHERE cle_cache = ?`).get(cleCache);
+  const dejaCalcule = await db.prepare(`SELECT revelation FROM tirages_sixieme_sens WHERE cle_cache = ?`).get(cleCache);
   if (dejaCalcule) {
     return res.json({ verrouille: false, revelation: dejaCalcule.revelation, cartes: cartesChoisies, tiragesRestants: 3 - tiragesAujourdhui - 1 >= 0 ? 2 - tiragesAujourdhui : 0 });
   }
@@ -939,7 +1010,7 @@ app.post('/api/sixieme-sens/revelation', async (req, res) => {
     if (rMeteo.ok) meteo = await rMeteo.text();
   } catch {}
 
-  const historique = db.prepare(
+  const historique = await db.prepare(
     `SELECT domaine, question, date FROM consultations WHERE profil_id = ? ORDER BY date DESC LIMIT 5`
   ).all(profilId);
   const historiqueTexte = historique.map(h => {
@@ -958,7 +1029,7 @@ Historique récent de la personne dans l'app : ${historiqueTexte || "aucun"}.
 Cartes tirées, dans l'ordre choisi (l'ordre a un sens narratif : présent → chemin → issue) : ${cartesDetail}.
 Génère une révélation qui mélange intuition mystique ET conseils pratiques concrets et actionnables du quotidien (ex : "prends un parapluie", "ménage-toi au travail aujourd'hui", "porte du rouge", "inspire 5 secondes avant de monter sur scène", "évite ce chemin ce soir"). Traduis les signes captés en formulations mystérieuses ("le ciel te met en garde", "les éléments s'agitent", "une ombre plane sur ta journée") — ne mentionne JAMAIS explicitement la météo, un degré de température, ou le mot "horoscope". 4 à 6 phrases, ton confiant et énigmatique. Réponds UNIQUEMENT avec ce JSON, rien d'autre : {"revelation": "texte complet ici"}`;
 
-  const brut = await appelerGroq("Tu réponds uniquement en JSON valide, sans texte autour.", promptSS);
+  const { texte: brut } = await appelerIA("Tu réponds uniquement en JSON valide, sans texte autour.", promptSS);
   let revelation;
   try {
     revelation = JSON.parse((brut || "").replace(/```json|```/g, "").trim()).revelation;
@@ -967,7 +1038,7 @@ Génère une révélation qui mélange intuition mystique ET conseils pratiques 
     revelation = `Les cartes ${cartesDetail} dessinent un chemin incertain mais porteur. ${aztro.description} Restez attentif aux signes du jour et faites confiance à votre instinct.`;
   }
 
-  db.prepare(`INSERT INTO tirages_sixieme_sens (profil_id, cartes_ids, cle_cache, revelation) VALUES (?, ?, ?, ?)`)
+  await db.prepare(`INSERT INTO tirages_sixieme_sens (profil_id, cartes_ids, cle_cache, revelation) VALUES (?, ?, ?, ?)`)
     .run(profilId, JSON.stringify(cartesChoisies), cleCache, revelation);
 
   res.json({ verrouille: false, revelation, cartes: cartesChoisies, tiragesRestants: 2 - tiragesAujourdhui });
@@ -976,20 +1047,21 @@ Génère une révélation qui mélange intuition mystique ET conseils pratiques 
 app.post('/api/supreme', async (req, res) => {
   const { profilId, message, langue } = req.body;
   const langueCible = langue || 'fr';
-  if (!message) return res.status(400).json({ error: "Message vide." });
+  if (!message || typeof message !== "string" || !message.trim()) return res.status(400).json({ error: "Message vide." });
+  if (message.length > 2000) return res.status(400).json({ error: "Message trop long." });
 
   const urgence = detecterUrgence(message);
   if (urgence === "suicide") {
     const reponseUrgence = messageUrgence("suicide");
     if (profilId) {
-      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
-      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponseUrgence);
+      await db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
+      await db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponseUrgence);
     }
     return res.json({ reponse: reponseUrgence, cartes: [], suggestions: [] });
   }
 
-  const historiqueChat = profilId ? db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId).reverse() : [];
-  const profilData = profilId ? db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId) || {} : {};
+  const historiqueChat = profilId ? (await db.prepare(`SELECT role, message FROM conversations_supremes WHERE profil_id = ? ORDER BY date DESC LIMIT 8`).all(profilId)).reverse() : [];
+  const profilData = profilId ? (await db.prepare(`SELECT * FROM profils WHERE id = ?`).get(profilId)) || {} : {};
   const nom = profilData?.nom || "Voyageur";
   const pays = profilData?.pays || "France";
   const contexteHistorique = historiqueChat.map(h => `${h.role === 'user' ? nom : 'Oracle'}: ${h.message}`).join('\n');
@@ -999,38 +1071,38 @@ app.post('/api/supreme', async (req, res) => {
   if (urgence === "decision_grave" && occurrencesDecisionGrave >= 2) {
     const reponseUrgence = messageUrgence("decision_grave");
     if (profilId) {
-      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
-      db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponseUrgence);
+      await db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
+      await db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponseUrgence);
     }
     return res.json({ reponse: reponseUrgence, cartes: [], suggestions: [] });
   }
 
   const systemPrompt = `Tu es un oracle mystique qui parle à ${nom} (${pays}). Réponds impérativement dans la langue de code ISO "${langueCible}", ton mystérieux mais chaleureux et INSTRUCTIF : glisse un vrai conseil concret dans la métaphore. Varie ton vocabulaire à chaque fois. Ne réutilise JAMAIS ces phrases déjà dites : ${dernieresReponsesOracle || "aucune"}. Historique récent :\n${contexteHistorique || "aucun"}\nRéponds UNIQUEMENT avec ce JSON exact, sans texte autour, sans balises markdown : {"reponse": "3 à 5 phrases riches et concrètes", "suggestions": ["question de suivi courte 1", "question de suivi courte 2", "question de suivi courte 3"]}`;
-  const brut = await appelerGroq(systemPrompt, message);
+  const { texte: brut } = await appelerIA(systemPrompt, message);
   let reponse, suggestions = [];
   try {
     const parsed = JSON.parse((brut || "").replace(/```json|```/g, "").trim());
     reponse = parsed.reponse; suggestions = parsed.suggestions || [];
-  } catch { reponse = brut || genererReponseSupreme(profilId, message, profilData); }
+  } catch { reponse = brut || await genererReponseSupreme(profilId, message, profilData); }
   const cartes = tirerCartes(1);
   if (profilId) {
-    db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
-    db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponse);
+    await db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'user', ?)`).run(profilId, message);
+    await db.prepare(`INSERT INTO conversations_supremes (profil_id, role, message) VALUES (?, 'oracle', ?)`).run(profilId, reponse);
   }
   res.json({ reponse, cartes, suggestions });
 });
 
-app.post('/api/supreme/feedback', (req, res) => {
+app.post('/api/supreme/feedback', async (req, res) => {
   const { profilId, messageId, feedback } = req.body;
   if (messageId) {
-    db.prepare(`UPDATE conversations_supremes SET feedback = ? WHERE id = ? AND profil_id = ?`).run(feedback, messageId, profilId);
-    const msgRow = db.prepare(`SELECT message FROM conversations_supremes WHERE id = ? AND profil_id = ?`).get(messageId, profilId);
+    await db.prepare(`UPDATE conversations_supremes SET feedback = ? WHERE id = ? AND profil_id = ?`).run(feedback, messageId, profilId);
+    const msgRow = await db.prepare(`SELECT message FROM conversations_supremes WHERE id = ? AND profil_id = ?`).get(messageId, profilId);
     if (msgRow && msgRow.message) {
       const messageText = msgRow.message;
-      const frag = db.prepare(`SELECT id, occurrence FROM fragments_appris WHERE type = 'complements' AND texte LIKE ?`).get('%' + messageText + '%');
+      const frag = await db.prepare(`SELECT id, occurrence FROM fragments_appris WHERE type = 'complements' AND texte LIKE ?`).get('%' + messageText + '%');
       if (frag) {
         const newOccurrence = feedback === 'like' ? frag.occurrence + 1 : Math.max(1, frag.occurrence - 1);
-        db.prepare(`UPDATE fragments_appris SET occurrence = ? WHERE id = ?`).run(newOccurrence, frag.id);
+        await db.prepare(`UPDATE fragments_appris SET occurrence = ? WHERE id = ?`).run(newOccurrence, frag.id);
       }
     }
   }
@@ -1057,4 +1129,23 @@ app.get('/politique-confidentialite', (req, res) => {
 
 simulationApprentissage();
 
-app.listen(PORT, () => console.log(`🔮 Oracle apprenant sur le port ${PORT}`));
+app.use((err, req, res, next) => {
+  console.error("Erreur serveur:", err.message);
+  if (res.headersSent) return next(err);
+  res.status(err.type === "entity.too.large" ? 413 : 500).json({
+    error: err.type === "entity.too.large" ? "Requête trop volumineuse." : "Le voile s'épaissit momentanément."
+  });
+});
+
+const serveur = app.listen(PORT, () => console.log(`🔮 Oracle apprenant sur le port ${PORT}`));
+
+function arreterProprement() {
+  serveur.close(() => {
+    try { db.close(); } catch {}
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+
+process.on("SIGTERM", arreterProprement);
+process.on("SIGINT", arreterProprement);

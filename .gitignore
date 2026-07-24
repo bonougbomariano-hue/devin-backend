@@ -1,3 +1,6 @@
-node_modules
+node_modules/
 .env
 oracle.db
+oracle.db-shm
+oracle.db-wal
+npm-debug.log*
